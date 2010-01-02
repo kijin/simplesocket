@@ -1,0 +1,27 @@
+A Simple Socket Client for PHP 5.2+
+
+This class implements a generic socket client. It can be extended to
+create client libraries working with text-based protocols.
+
+Features:
+
+  * Socket creation, reading, and writing (of course).
+  * Lazy loading : will not connect until actually needed.
+  * Automatically deal with end-of-line CRLF sequences.
+  * Basic key validation and command building helper methods.
+
+Public Methods:
+
+  * __construct($host, $port, $timeout = 5)
+  * connect()
+  * disconnect()
+
+Protected Methods:
+
+  * read($bytes, $autonewline = true, $trim = true)
+  * readline($trim = true)
+  * write($string, $autonewline = true)
+  * validate_key($key)
+  * build_command()
+
+License: MIT License.
