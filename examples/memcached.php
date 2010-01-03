@@ -24,7 +24,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.1
+ * Version: 0.1.2
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -70,33 +70,46 @@ class MemcachedClient extends SimpleSocketClient
         
         $this->validate_key($key);
         
-        // Write the command.
+        // Try block.
         
-        $this->write('get ' . $key);
+        try
+        {
+            // Write the command.
+            
+            $this->write('get ' . $key);
+            
+            // Read the response.
+            
+            $response = $this->readline();
+            if ($response == 'END') return false;
+            
+            // Parse the response.
+            
+            $response = explode(' ', $response);
+            $flag = $response[2];
+            $length = $response[3];
+            
+            // Read the data.
+            
+            $data = $this->read($length);
+            $data = $this->decode($data, $flag);
+            
+            // Read 'END'.
+            
+            $end = $this->readline();
+            
+            // Return the data.
+            
+            return $data;
+        }
         
-        // Read the response.
+        // Return false on error.
         
-        $response = $this->readline();
-        if ($response == 'END') return false;
-        
-        // Parse the response.
-        
-        $response = explode(' ', $response);
-        $flag = $response[2];
-        $length = $response[3];
-        
-        // Read the data.
-        
-        $data = $this->read($length);
-        $data = $this->decode($data, $flag);
-        
-        // Read 'END'.
-        
-        $end = $this->readline();
-        
-        // Return the data.
-        
-        return $data;
+        catch (Exception $e)
+        {
+            trigger_error('Memcached: ' . $e->getMessage(), E_USER_NOTICE);
+            return false;
+        }
     }
     
     
@@ -117,39 +130,52 @@ class MemcachedClient extends SimpleSocketClient
         
         $return = array();
         
-        // Write the command.
+        // Try block.
         
-        $this->write('get ' . implode(' ', $keys));
-        
-        // Read multiple responses until 'END'.
-        
-        while (true)
+        try
         {
-            // Read the response.
+            // Write the command.
             
-            $response = $this->readline();
-            if ($response == 'END') break;
+            $this->write('get ' . implode(' ', $keys));
             
-            // Parse the response.
+            // Read multiple responses until 'END'.
             
-            $response = explode(' ', $response);
-            $key = $response[1];
-            $flag = $response[2];
-            $length = $response[3];
+            while (true)
+            {
+                // Read the response.
+                
+                $response = $this->readline();
+                if ($response == 'END') break;
+                
+                // Parse the response.
+                
+                $response = explode(' ', $response);
+                $key = $response[1];
+                $flag = $response[2];
+                $length = $response[3];
+                
+                // Read the data.
+                
+                $data = $this->read($length);
+                $data = $this->decode($data, $flag);
+                
+                // Add to the return array.
+                
+                $return[$key] = $data;
+            }
             
-            // Read the data.
+            // Return.
             
-            $data = $this->read($length);
-            $data = $this->decode($data, $flag);
-            
-            // Add to the return array.
-            
-            $return[$key] = $data;
+            return $return;
         }
         
-        // Return.
+        // Return false on error.
         
-        return $return;
+        catch (Exception $e)
+        {
+            trigger_error('Memcached: ' . $e->getMessage(), E_USER_NOTICE);
+            return false;
+        }
     }
     
     
@@ -258,15 +284,28 @@ class MemcachedClient extends SimpleSocketClient
         
         list($flag, $value) = $this->encode($value);
         
-        // Write the command and the value together.
+        // Try block.
         
-        $command = $this->build_command($command, $key, $flag, $expiry, strlen($value));
-        $this->write($command . "\r\n" . $value . "\r\n", false);
+        try
+        {
+            // Write the command and the value together.
+            
+            $command = $this->build_command($command, $key, $flag, $expiry, strlen($value));
+            $this->write($command . "\r\n" . $value . "\r\n", false);
+            
+            // Read the response.
+            
+            $response = $this->readline();
+            return ($response === 'STORED') ? true : false;        
+        }
         
-        // Read the response.
+        // Return false on error.
         
-        $response = $this->readline();
-        return ($response === 'STORED') ? true : false;        
+        catch (Exception $e)
+        {
+            trigger_error('Memcached: ' . $e->getMessage(), E_USER_NOTICE);
+            return false;
+        }
     }
     
     
@@ -286,22 +325,35 @@ class MemcachedClient extends SimpleSocketClient
         
         $this->validate_key($key);
         
-        // Write the command and read the response.
+        // Try block.
         
-        $this->write('incr ' . $key . ' ' . (int)$diff);
-        $response = $this->readline();
-        
-        // If unsuccessful, force set to $diff.
-        
-        if (!ctype_digit($response))
+        try
         {
-            $this->store('set', $key, $diff, 0);
-            return $diff;
+            // Write the command and read the response.
+            
+            $this->write('incr ' . $key . ' ' . (int)$diff);
+            $response = $this->readline();
+            
+            // If unsuccessful, force set to $diff.
+            
+            if (!ctype_digit($response))
+            {
+                $this->store('set', $key, $diff, 0);
+                return $diff;
+            }
+            
+            // Otherwise, return the new value.
+            
+            return $response;
         }
         
-        // Otherwise, return the new value.
+        // Return false on error.
         
-        return $response;
+        catch (Exception $e)
+        {
+            trigger_error('Memcached: ' . $e->getMessage(), E_USER_NOTICE);
+            return false;
+        }
     }
     
     
@@ -321,22 +373,35 @@ class MemcachedClient extends SimpleSocketClient
         
         $this->validate_key($key);
         
-        // Write the command and read the response.
+        // Try block.
         
-        $this->write('decr ' . $key . ' ' . (int)$diff);
-        $response = $this->readline();
-        
-        // If unsuccessful, force set to 0.
-        
-        if (!ctype_digit($response))
+        try
         {
-            $this->store('set', $key, 0, 0);
-            return 0;
+            // Write the command and read the response.
+            
+            $this->write('decr ' . $key . ' ' . (int)$diff);
+            $response = $this->readline();
+            
+            // If unsuccessful, force set to 0.
+            
+            if (!ctype_digit($response))
+            {
+                $this->store('set', $key, 0, 0);
+                return 0;
+            }
+            
+            // Otherwise, return the new value.
+            
+            return $response;        
         }
         
-        // Otherwise, return the new value.
+        // Return false on error.
         
-        return $response;        
+        catch (Exception $e)
+        {
+            trigger_error('Memcached: ' . $e->getMessage(), E_USER_NOTICE);
+            return false;
+        }
     }
     
     
@@ -353,11 +418,24 @@ class MemcachedClient extends SimpleSocketClient
         
         $this->validate_key($key);
         
-        // Write the command and read the response.
+        // Try block.
         
-        $this->write('delete ' . $key);
-        $response = $this->readline();
-        return ($response === 'DELETED') ? true : false;
+        try
+        {
+            // Write the command and read the response.
+            
+            $this->write('delete ' . $key);
+            $response = $this->readline();
+            return ($response === 'DELETED') ? true : false;
+        }
+        
+        // Return false on error.
+        
+        catch (Exception $e)
+        {
+            trigger_error('Memcached: ' . $e->getMessage(), E_USER_NOTICE);
+            return false;
+        }
     }
     
     
@@ -374,11 +452,24 @@ class MemcachedClient extends SimpleSocketClient
         
         $delay = (int)$delay;
         
-        // Write the command and read the response.
+        // Try block.
         
-        $this->write('flush_all ' . (int)$delay);
-        $response = $this->readline();
-        return ($response === 'OK') ? true : false;
+        try
+        {
+            // Write the command and read the response.
+            
+            $this->write('flush_all ' . (int)$delay);
+            $response = $this->readline();
+            return ($response === 'OK') ? true : false;
+        }
+        
+        // Return false on error.
+        
+        catch (Exception $e)
+        {
+            trigger_error('Memcached: ' . $e->getMessage(), E_USER_NOTICE);
+            return false;
+        }
     }
     
     
@@ -394,28 +485,41 @@ class MemcachedClient extends SimpleSocketClient
         
         $return = array();
         
-        // Write the command.
+        // Try block.
         
-        $this->write('stats');
-        
-        // Read multiple responses until 'END'.
-        
-        while (true)
+        try
         {
-            // Read the response.
+            // Write the command.
             
-            $response = $this->readline();
-            if ($response == 'END') break;
-            $response = explode(' ', $response);
+            $this->write('stats');
             
-            // Add to the return array.
+            // Read multiple responses until 'END'.
             
-            $return[$response[1]] = $response[2];
+            while (true)
+            {
+                // Read the response.
+                
+                $response = $this->readline();
+                if ($response == 'END') break;
+                $response = explode(' ', $response);
+                
+                // Add to the return array.
+                
+                $return[$response[1]] = $response[2];
+            }
+            
+            // Return.
+            
+            return $return;
         }
         
-        // Return.
+        // Return false on error.
         
-        return $return;
+        catch (Exception $e)
+        {
+            trigger_error('Memcached: ' . $e->getMessage(), E_USER_NOTICE);
+            return false;
+        }
     }
     
     

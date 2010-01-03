@@ -10,7 +10,7 @@
  * as well as basic key validation and command building helper methods.
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.1
+ * Version: 0.1.2
  * 
  * Copyright (c) 2010, Kijin Sung <kijinbear@gmail.com>
  * 
@@ -84,18 +84,18 @@ class SimpleSocketClient
     {
         // If already connected, return true.
         
-        if ($this->con !== null) return true;
+        if ($this->con !== null && $this->con !== false) return true;
         
         // Attempt to connect.
         
         $this->con = @stream_socket_client($this->host . ':' . $this->port, $errno, $errstr, $this->timeout);
         
-        // If there's an error, throw an exception.
+        // If there's an error, set $con to false, and throw an exception.
         
         if (!$this->con)
         {
-            $this->con = null;
-            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port . ': ' . $errstr . ' (#' . $errno . ')');
+            $this->con = false;
+            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port . ': ' . $errstr . ' (code ' . $errno . ')');
         }
         
         // Return true to indicate success.
@@ -147,6 +147,10 @@ class SimpleSocketClient
         // If not connected yet, connect now.
         
         if ($this->con === null) $this->connect();
+        if ($this->con === false)
+        {
+            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port);
+        }
         
         // If $autonewline is true, read 2 more bytes.
         
@@ -189,6 +193,10 @@ class SimpleSocketClient
         // If not connected yet, connect now.
         
         if ($this->con === null) $this->connect();
+        if ($this->con === false)
+        {
+            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port);
+        }
         
         // Read a line from the socket.
         
@@ -228,6 +236,10 @@ class SimpleSocketClient
         // If not connected yet, connect now.
         
         if ($this->con === null) $this->connect();
+        if ($this->con === false)
+        {
+            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port);
+        }
         
         // If $autonewline is true, add CRLF to the content.
         
