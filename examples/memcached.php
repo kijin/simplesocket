@@ -77,6 +77,10 @@ class MemcachedClient extends SimpleSocketClient
         // Read the response.
         
         $response = $this->readline();
+        if ($response == 'END') return false;
+        
+        // Parse the response.
+        
         $response = explode(' ', $response);
         $flag = $response[2];
         $length = $response[3];
@@ -125,6 +129,9 @@ class MemcachedClient extends SimpleSocketClient
             
             $response = $this->readline();
             if ($response == 'END') break;
+            
+            // Parse the response.
+            
             $response = explode(' ', $response);
             $key = $response[1];
             $flag = $response[2];
