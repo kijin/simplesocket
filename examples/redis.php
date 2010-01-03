@@ -7,20 +7,26 @@
  * used by the Redis server. Command specifications are based on Redis 1.2,
  * but earlier versions of Redis are also fully supported.
  * 
- * This library will automatically detect the version of the Redis server and
- * issue multi-bulk commands if the version is 1.1 or higher. Commands that are
- * currently not in the specification are also likely to succeed without any
- * modification when they become available, because this library always uses
- * the multi-bulk format if the command is not recognized.
+ * Supported Features:
+ *   - Automatic detection of Redis version.
+ *   - Multi-bulk commands. (Only available with Redis 1.1+)
+ *   - Support for possible new commands using the multi-bulk format.
  * 
- * This library does not support multiple servers, because Simple Socket Client
- * doesn't. If you want to distribute keys across several Redis instances,
- * use a more fully featured client library (there are quite a few out there),
+ * Unsupported Features:
+ *   - Monitor command.
+ *   - Key distribution and load balancing.
+ * 
+ * If you attempt to use a command that is not supported by your version of
+ * Redis, you will get an Exception. The same is true for most server error
+ * conditions; it is your responsibility to catch those exceptions.
+ * 
+ * If you want to distribute keys across several Redis instances, use a more
+ * fully featured client library (there are quite a few out there, you know);
  * or use this library in combination with your own key distribution algorithm.
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.1
+ * Version: 0.1.2
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -49,6 +55,51 @@ require_once(dirname(__FILE__) . '/../simplesocketclient.php');
 
 class RedisClient extends SimpleSocketClient
 {
+    // Configuration.
+    
+    private $compression = false;
+    private $redis_version = false;
+    
+    
+    // Set compression threshold.
+    
+    public function set_compression($threshold = 1024)
+    {
+        // Save to instance, or false if an invalid value has been given.
+        
+        $this->compression = (int)$threshold ? (int)$threshold : false;
+    }
+    
+    
+    // Set Redis version. This method will disable automatic checking.
+    
+    public function set_redis_version($version)
+    {
+        // Save to instance.
+        
+        $this->redis_version = (float)$version;
+    }
+    
+    
+    // Get Redis version. This method will automatically check the server.
+    
+    public function get_redis_version()
+    {
+        // Use an INFO command to obtain the version.
+        
+        if ($this->redis_version === false) 
+        {
+            $this->write('INFO');
+            $info = $this->get_response();
+            $this->redis_version = (float)substr($info, 14, 3);
+        }
+        
+        // Return the cached value.
+        
+        return $this->redis_version;
+    }
+    
+    
     // AUTH method.
     
     public function auth($password)
@@ -143,7 +194,7 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         $this->write('GET ' . $key);
-        return $this->unserialize($this->get_response());
+        return $this->decode($this->get_response());
     }
     
     
@@ -166,12 +217,13 @@ class RedisClient extends SimpleSocketClient
         $response = $this->get_response();
         if (!is_array($response) || count($response) !== $count) return false;
         
-        // Build the return array.
+        // Convert to an associative array.
         
         $return = array();
-        for ($i = 0; $i < $count; $i++)
+        $count = count($response);
+        for ($i = 0; $i < $count; $i ++)
         {
-            $return[$keys[$i]] = $this->unserialize($response[$i]);
+            $return[$keys[$i]] = $this->decode($response[$i]);
         }
         return $return;
     }
@@ -185,14 +237,10 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         
-        // If the value is not scalar, serialize.
-        
-        if (!is_scalar($value)) $value = '#SERiALiZED:' . serialize($value);
-        
         // Attempt a multi-bulk command. (Expect: bulk)
         
-        $this->multi_bulk_command(array('GETSET', $key, $value), 2);
-        return $this->unserialize($this->get_response());
+        $this->multi_bulk_command(array('GETSET', $key, $this->encode($value)), 2);
+        return $this->decode($this->get_response());
     }
     
     
@@ -249,9 +297,9 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         
-        // If the value is not scalar, serialize.
+        // Serialize and/or compress the value.
         
-        if (!is_scalar($value)) $value = '#SERiALiZED:' . serialize($value);
+        $value = $this->encode($value);
         
         // Write either SET or SETNX.
         
@@ -280,6 +328,13 @@ class RedisClient extends SimpleSocketClient
     
     public function mset($pairs, $overwrite = true)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Validate the keys.
         
         $keys = array_keys($pairs);
@@ -291,7 +346,7 @@ class RedisClient extends SimpleSocketClient
         foreach ($pairs as $key => $value)
         {
             $args[] = (string)$key;
-            $args[] = is_scalar($value) ? $value : ('#SERiALiZED:' . serialize($value));
+            $args[] = $this->encode($value);
         }
         
         // Attempt a multi-bulk command. (Expect: integer; cast to bool)
@@ -408,7 +463,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: status.
         
         $this->validate_key($key);
-        $this->multi_bulk_command(array('LPUSH', $key, $value), 2);
+        $this->multi_bulk_command(array('LPUSH', $key, $this->encode($value)), 2);
         return ($this->get_response() === true) ? true : false;
     }
     
@@ -420,7 +475,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: status.
         
         $this->validate_key($key);
-        $this->multi_bulk_command(array('RPUSH', $key, $value), 2);
+        $this->multi_bulk_command(array('RPUSH', $key, $this->encode($value)), 2);
         return ($this->get_response() === true) ? true : false;
     }
     
@@ -446,7 +501,7 @@ class RedisClient extends SimpleSocketClient
         $this->validate_key($key);
         $command = $this->build_command('LRANGE', $key, (int)$start, (int)$end);
         $this->write($command);
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -472,7 +527,7 @@ class RedisClient extends SimpleSocketClient
         $this->validate_key($key);
         $command = $this->build_command('LINDEX', $key, (int)$index);
         $this->write($command);
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -483,7 +538,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: status.
         
         $this->validate_key($key);
-        $this->multi_bulk_command(array('LSET', $key, $index, $value), 3);
+        $this->multi_bulk_command(array('LSET', $key, $index, $this->encode($value)), 3);
         return ($this->get_response() === true) ? true : false;
     }
     
@@ -495,7 +550,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: integer.
         
         $this->validate_key($key);
-        $this->multi_bulk_command(array('LREM', $key, $count, $value), 3);
+        $this->multi_bulk_command(array('LREM', $key, $count, $this->encode($value)), 3);
         return $this->get_response();
     }
     
@@ -508,7 +563,7 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         $this->write('LPOP ' . $key);
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -520,7 +575,7 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         $this->write('RPOP ' . $key);
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -528,6 +583,13 @@ class RedisClient extends SimpleSocketClient
     
     public function blpop($keys, $timeout)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.3)
+        {
+            throw new Exception('MSET is only supported in Redis 1.3+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Take care of arrays.
         
         if (is_array($keys))
@@ -544,8 +606,8 @@ class RedisClient extends SimpleSocketClient
         
         // Expect: multi-bulk.
         
-        $this->multi_bulk_command($keys);
-        return $this->get_response();
+        $this->multi_bulk_command($keys);        
+        return $this->decode($this->get_response());
     }
     
     
@@ -553,6 +615,13 @@ class RedisClient extends SimpleSocketClient
     
     public function brpop($keys, $timeout)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.3)
+        {
+            throw new Exception('MSET is only supported in Redis 1.3+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Take care of arrays.
         
         if (is_array($keys))
@@ -569,21 +638,28 @@ class RedisClient extends SimpleSocketClient
         
         // Expect: multi-bulk.
         
-        $this->multi_bulk_command($keys);
-        return $this->get_response();
+        $this->multi_bulk_command($keys);        
+        return $this->decode($this->get_response());
     }
     
     
-    // RPOPLPUSH method.
+    // RPOPLPUSH method. (Redis 1.1+)
     
     public function rpoplpush($source_key, $destination_key)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Expect: bulk.
         
         $this->validate_key($source_key);
         $this->validate_key($destination_key);
         $mbc = $this->multi_bulk_command(array('RPOPLPUSH', $source_key, $destination_key));
-        return $mbc ? $this->get_response() : false;
+        return $mbc ? $this->decode($this->get_response()) : false;
     }
     
     
@@ -594,7 +670,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: integer (cast to bool).
         
         $this->validate_key($key);
-        $this->multi_bulk_command(array('SADD', $key, $member), 2);
+        $this->multi_bulk_command(array('SADD', $key, $this->encode($member)), 2);
         return (bool)$this->get_response();
     }
     
@@ -606,7 +682,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: integer (cast to bool).
         
         $this->validate_key($key);
-        $this->multi_bulk_command(array('SREM', $key, $member), 2);
+        $this->multi_bulk_command(array('SREM', $key, $this->encode($member)), 2);
         return (bool)$this->get_response();
     }
     
@@ -619,7 +695,7 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         $this->write('SPOP ' . $key);
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -631,7 +707,7 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($source_key);
         $this->validate_key($destination_key);
-        $this->multi_bulk_command(array('SMOVE', $source_key, $destination_key, $member), 3);
+        $this->multi_bulk_command(array('SMOVE', $source_key, $destination_key, $this->encode($member)), 3);
         return (bool)$this->get_response();
     }
     
@@ -655,7 +731,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: integer (cast to bool).
         
         $this->validate_key($key);
-        $this->multi_bulk_command(array('SISMEMBER', $key, $member), 2);
+        $this->multi_bulk_command(array('SISMEMBER', $key, $this->encode($member)), 2);
         return (bool)$this->get_response();
     }
     
@@ -672,7 +748,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: multi-bulk.
         
         $this->write('SINTER ' . implode(' ', $keys));
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -705,7 +781,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: multi-bulk.
         
         $this->write('SUNION ' . implode(' ', $keys));
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -738,7 +814,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: multi-bulk.
         
         $this->write('SDIFF ' . implode(' ', $keys));
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -767,7 +843,7 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         $this->write('SMEMBERS ' . $key);
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -779,7 +855,7 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         $this->write('SRANDMEMBER ' . $key);
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -787,10 +863,17 @@ class RedisClient extends SimpleSocketClient
     
     public function zadd($key, $score, $member)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Expect: integer (cast to bool).
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZADD', $key, $score, $member));
+        $mbc = $this->multi_bulk_command(array('ZADD', $key, $score, $this->encode($member)));
         if (!$mbc) return false;
         return (bool)$this->get_response();
     }
@@ -800,10 +883,17 @@ class RedisClient extends SimpleSocketClient
     
     public function zrem($key, $score, $member)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Expect: integer (cast to bool).
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZREM', $key, $score, $member));
+        $mbc = $this->multi_bulk_command(array('ZREM', $key, $score, $this->encode($member)));
         if (!$mbc) return false;
         return (bool)$this->get_response();
     }
@@ -813,10 +903,17 @@ class RedisClient extends SimpleSocketClient
     
     public function zincrby($key, $increment, $member)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Expect: integer.
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZINCRBY', $key, $increment, $member));
+        $mbc = $this->multi_bulk_command(array('ZINCRBY', $key, $increment, $this->encode($member)));
         if (!$mbc) return false;
         return $this->get_response();
     }
@@ -826,6 +923,13 @@ class RedisClient extends SimpleSocketClient
     
     public function zrange($key, $start, $end, $with_scores = false, $reverse = false)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Write the command. (Expect: multi-bulk)
         
         $this->validate_key($key);
@@ -843,7 +947,7 @@ class RedisClient extends SimpleSocketClient
             $return = array();
             for ($i = 0; $i < $count; $i += 2)
             {
-                $return[$raw[$i]] = $return[$raw[$i + 1]];
+                $return[$raw[$i]] = $this->decode($return[$raw[$i + 1]]);
             }
             return $return;
         }
@@ -852,7 +956,7 @@ class RedisClient extends SimpleSocketClient
         
         else
         {
-            return $this->get_response();
+            return $this->decode($this->get_response());
         }
     }
     
@@ -861,6 +965,13 @@ class RedisClient extends SimpleSocketClient
     
     public function zrevrange($key, $start, $end, $with_scores)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Call zrange() with $reverse = true.
         
         return $this->zrange($key, $start, $end, $with_scores, true);
@@ -871,6 +982,13 @@ class RedisClient extends SimpleSocketClient
     
     public function zrangebyscore($key, $min, $max, $offset = false, $count = false)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Write the command.
         
         $this->validate_key($key);
@@ -887,7 +1005,7 @@ class RedisClient extends SimpleSocketClient
         
         // Expect: multi-bulk.
         
-        return $this->get_response();
+        return $this->decode($this->get_response());
     }
     
     
@@ -895,6 +1013,13 @@ class RedisClient extends SimpleSocketClient
     
     public function zremrangebyscore($key, $min, $max)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Expect: integer.
         
         $this->validate_key($key);
@@ -908,6 +1033,13 @@ class RedisClient extends SimpleSocketClient
     
     public function zcard($key)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Expect: integer.
         
         $this->validate_key($key);
@@ -920,10 +1052,17 @@ class RedisClient extends SimpleSocketClient
     
     public function zscore($key, $member)
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Expect: bulk.
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZSCORE', $key, $member));
+        $mbc = $this->multi_bulk_command(array('ZSCORE', $key, $this->encode($member)));
         if (!$mbc) return false;
         return $this->get_response();
     }
@@ -996,6 +1135,13 @@ class RedisClient extends SimpleSocketClient
     
     public function bgrewriteaof()
     {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
         // Expect: status.
         
         $this->write('BGREWRITEAOF');
@@ -1162,22 +1308,9 @@ class RedisClient extends SimpleSocketClient
     
     private function multi_bulk_command($elements, $force = 0)
     {
-        // Cache the availability of multi-bulk commands. (Redis 1.1+)
+        // If multi-bulk commands are not available. (Redis 1.1+)
         
-        static $mbc = null;
-
-        // Check the availability of multi-bulk commands. (Redis 1.1+)
-        
-        if ($mbc === null)
-        {
-            $this->write('INFO');
-            $info = $this->get_response();
-            $mbc = (substr($info, 14, 3) >= 1.1) ? true : false;
-        }
-        
-        // If multi-bulk commands are not available.
-        
-        if ($mbc === false)
+        if ($this->get_redis_version() < 1.1)
         {
             // Fall back to an old-style command.
             
@@ -1204,7 +1337,7 @@ class RedisClient extends SimpleSocketClient
             }
         }
         
-        // If multi-bulk commands are available, write one.
+        // Otherwise, start writing a multi-bulk command.
         
         $command = '*' . count($elements) . "\r\n";
         
@@ -1254,15 +1387,61 @@ class RedisClient extends SimpleSocketClient
     }
     
     
-    // Custom unserialize method.
+    // Serialization and compression subroutine.
     
-    private function unserialize($data)
+    private function encode($data)
     {
-        // If the data is serialized, return it unserialized.
+        // If the data is not scalar, serialize it.
         
-        if (!strncmp($data, '#SERiALiZED:', 12)) return unserialize(substr($data, 12));
+        if (!is_scalar($data))
+        {
+            $data = '#SERiALiZeD:' . serialize($data);
+        }
         
-        // Otherwise, return intact.
+        // If the data is bigger than the threshold, compress it.
+        
+        if ($this->compression && strlen($data) >= $this->compression)
+        {
+            $data = '&GziPPed:' . gzcompress($data);
+        }
+        
+        // Return.
+        
+        return $data;
+    }
+    
+    
+    // Unserialization and decompression subroutine.
+    
+    private function decode($data)
+    {
+        // If the data is an array, decode recursively.
+        
+        if (is_array($data))
+        {
+            $count = count($data);
+            for ($i = 0; $i < $count; $i++)
+            {
+                $data[$i] = $this->decode($data[$i]);
+            }
+            return $data;
+        }
+        
+        // If the data seems compressed, decompress it.
+        
+        if (!strncmp($data, '&GziPPed:', 9))
+        {
+            $data = gzuncompress(substr($data, 9));
+        }
+        
+        // If the data seems serialized, unserialize it.
+        
+        if (!strncmp($data, '#SERiALiZeD:', 12))
+        {   
+            $data = unserialize(substr($data, 12));
+        }
+        
+        // Return the data.
         
         return $data;
     }
