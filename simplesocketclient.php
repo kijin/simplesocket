@@ -10,7 +10,7 @@
  * as well as basic key validation and command building helper methods.
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1
+ * Version: 0.1.1
  * 
  * Copyright (c) 2010, Kijin Sung <kijinbear@gmail.com>
  * 
@@ -289,7 +289,7 @@ class SimpleSocketClient
         
         // Check for illegal characters.
         
-        if (preg_match('[^\x21-\xfe]', $key)) throw new Exception('Illegal character in key: ' . $key);
+        if (preg_match('/[^\\x21-\\x7e]/', $key)) throw new Exception('Illegal character in key: ' . $key);
         
         // Return true to indicate pass.
         

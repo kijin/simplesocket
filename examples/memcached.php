@@ -35,7 +35,7 @@ class MemcachedClient extends SimpleSocketClient
         // Read the data.
         
         $data = $this->read($length);
-        if ($flag) $data = unserialize($data);
+        if ($flag == 2) $data = unserialize($data);
         
         // Read 'END'.
         
@@ -155,11 +155,11 @@ class MemcachedClient extends SimpleSocketClient
         if (!is_scalar($value))
         {
             $value = serialize($value);
-            $flag = 1;
+            $flag = 2;
         }
         else
         {
-            $flag = 0;
+            $flag = 1;
         }
         
         // Write the command and the value together.
