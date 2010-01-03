@@ -1,15 +1,64 @@
 <?php
 
-// Load the simple socket client library.
+/**
+ * Memcached Client Library for PHP 5.2+
+ * 
+ * Based on Simple Socket Client, this library implements the text protocol
+ * used by the Memcached caching server as well as by several other databases.
+ * 
+ * This library can read any data serialized/compressed by either (1) the newer
+ * Memcached extension (http://pecl.php.net/package/memcached) or (2) the older
+ * Memcache extension (http://pecl.php.net/package/memcache). When serializing
+ * or compressing data, this library uses the same flags as the newer Memcached
+ * extension does, which makes the older Memcache extension unable to access
+ * certain values. There is no workaround for this shortcoming.
+ * 
+ * Unlike the two extensions mentioned above, this library will not fail when
+ * attempting to increment/decrement a nonexistent key. Instead, this library
+ * will assume an initial value of zero (0) and increment/decrement accordingly.
+ * 
+ * This library does not support multiple servers, because Simple Socket Client
+ * doesn't. If you want to distribute keys across several Memcached instances,
+ * use either of the two extensions mentioned above (they're faster anyway),
+ * or use this library in combination with your own key distribution algorithm.
+ * May the author suggests Distrib (http://github.com/kijin/distrib).
+ * 
+ * URL: http://github.com/kijin/simplesocket
+ * Version: 0.1.1
+ */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
 
-// Memcached client.
+/**
+ * Copyright (c) 2010, Kijin Sung <kijinbear@gmail.com>
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
 
 class MemcachedClient extends SimpleSocketClient
 {
-    // GET method.
-    // Takes a key and returns the value as a string, or false on failure.
+    /**
+     * GET : Retrieve an item from the server.
+     * 
+     * @param   string  The key.
+     * @return  mixed   The value, or false if the key does not exist.
+     */
     
     public function get($key)
     {
@@ -35,7 +84,7 @@ class MemcachedClient extends SimpleSocketClient
         // Read the data.
         
         $data = $this->read($length);
-        if ($flag == 2) $data = unserialize($data);
+        $data = $this->decode($data, $flag);
         
         // Read 'END'.
         
@@ -46,8 +95,13 @@ class MemcachedClient extends SimpleSocketClient
         return $data;
     }
     
-    // GET MULTI method.
-    // Takes an array of keys, and returns an array of keys => values, or false on failure.
+    
+    /**
+     * GETMULTI : Retrieve multiple items from the server.
+     * 
+     * @param   array  An array of keys, e.g. array('key1', 'key2');
+     * @return  array  An array of keys and their corresponding values.
+     */
     
     public function getmulti($keys)
     {
@@ -79,7 +133,7 @@ class MemcachedClient extends SimpleSocketClient
             // Read the data.
             
             $data = $this->read($length);
-            if ($flag) $data = unserialize($data);
+            $data = $this->decode($data, $flag);
             
             // Add to the return array.
             
@@ -91,8 +145,15 @@ class MemcachedClient extends SimpleSocketClient
         return $return;
     }
     
-    // SET method.
-    // Returns true on success, false on failure.
+    
+    /**
+     * SET : Store an item in the server.
+     * 
+     * @param   string  The key.
+     * @param   mixed   The value.
+     * @param   int     Expiry, in seconds.
+     * @return  bool    True on success, false on failure.
+     */
     
     public function set($key, $value, $expiry = 0)
     {
@@ -101,8 +162,15 @@ class MemcachedClient extends SimpleSocketClient
         return $this->store('set', $key, $value, $expiry);
     }
     
-    // ADD method.
-    // Returns true on success, false on failure.
+    
+    /**
+     * ADD : Store an item in the server, only if the key doesn't exist.
+     * 
+     * @param   string  The key.
+     * @param   mixed   The value.
+     * @param   int     Expiry, in seconds.
+     * @return  bool    True on success, false on failure.
+     */
     
     public function add($key, $value, $expiry = 0)
     {
@@ -111,8 +179,15 @@ class MemcachedClient extends SimpleSocketClient
         return $this->store('add', $key, $value, $expiry);
     }
     
-    // REPLACE method.
-    // Returns true on success, false on failure.
+    
+    /**
+     * REPLACE : Store an item in the server, only if the key already exists.
+     * 
+     * @param   string  The key.
+     * @param   mixed   The value.
+     * @param   int     Expiry, in seconds.
+     * @return  bool    True on success, false on failure.
+     */
     
     public function replace($key, $value, $expiry = 0)
     {
@@ -121,8 +196,15 @@ class MemcachedClient extends SimpleSocketClient
         return $this->store('replace', $key, $value, $expiry);
     }
     
-    // APPEND method.
-    // Returns true on success, false on failure.
+    
+    /**
+     * APPEND : Append to existing value; don't use with compressed strings!
+     * 
+     * @param   string  The key.
+     * @param   mixed   The value.
+     * @param   int     Expiry, in seconds.
+     * @return  bool    True on success, false on failure.
+     */
     
     public function append($key, $value)
     {
@@ -131,8 +213,15 @@ class MemcachedClient extends SimpleSocketClient
         return $this->store('append', $key, $value, 0);
     }
     
-    // PREPEND method.
-    // Returns true on success, false on failure.
+    
+    /**
+     * PREPEND : Prepend to existing value; don't use with compressed strings!
+     * 
+     * @param   string  The key.
+     * @param   mixed   The value.
+     * @param   int     Expiry, in seconds.
+     * @return  bool    True on success, false on failure.
+     */
     
     public function prepend($key, $value)
     {
@@ -141,8 +230,16 @@ class MemcachedClient extends SimpleSocketClient
         return $this->store('prepend', $key, $value, 0);
     }
     
-    // Common subroutine for all storage commands.
-    // Returns true on success, false on failure.
+    
+    /**
+     * Common subroutine for set(), add(), replace(), append(), prepend().
+     * 
+     * @param   string  The command.
+     * @param   string  The key.
+     * @param   mixed   The value.
+     * @param   int     Expiry, in seconds.
+     * @return  bool    True on success, false on failure.
+     */
     
     private function store($command, $key, $value, $expiry)
     {
@@ -150,17 +247,9 @@ class MemcachedClient extends SimpleSocketClient
         
         $this->validate_key($key);
         
-        // If the value is not scalar, serialize and set a flag.
+        // Serialize and/or compress the data.
         
-        if (!is_scalar($value))
-        {
-            $value = serialize($value);
-            $flag = 2;
-        }
-        else
-        {
-            $flag = 1;
-        }
+        list($flag, $value) = $this->encode($value);
         
         // Write the command and the value together.
         
@@ -173,8 +262,16 @@ class MemcachedClient extends SimpleSocketClient
         return ($response === 'STORED') ? true : false;        
     }
     
-    // INCR method.
-    // Returns the new value, or false on failure.
+    
+    /**
+     * INCR : Increment an integer value.
+     * 
+     * If the key doesn't exist, zero (0) will be assumed.
+     * 
+     * @param   string  The key.
+     * @param   int     The increment. [optional: default is 1]
+     * @return  int     The new value.
+     */
     
     public function incr($key, $diff = 1)
     {
@@ -192,7 +289,7 @@ class MemcachedClient extends SimpleSocketClient
         if (!ctype_digit($response))
         {
             $this->store('set', $key, $diff, 0);
-            return $this->get($key);
+            return $diff;
         }
         
         // Otherwise, return the new value.
@@ -200,8 +297,16 @@ class MemcachedClient extends SimpleSocketClient
         return $response;
     }
     
-    // DECR method.
-    // Returns the new value, or false on failure.
+    
+    /**
+     * DECR : Decrement an integer value.
+     * 
+     * The new value will not go below zero (0).
+     * 
+     * @param   string  The key.
+     * @param   int     The decrement. [optional: default is 1]
+     * @return  int     The new value.
+     */
     
     public function decr($key, $diff = 1)
     {
@@ -227,8 +332,13 @@ class MemcachedClient extends SimpleSocketClient
         return $response;        
     }
     
-    // DELETE method.
-    // Returns true on success, false on failure.
+    
+    /**
+     * DELETE : delete a key from the server.
+     * 
+     * @param   string  The key to delete.
+     * @return  bool    True on success, false on failure.
+     */
     
     public function delete($key)
     {
@@ -243,8 +353,13 @@ class MemcachedClient extends SimpleSocketClient
         return ($response === 'DELETED') ? true : false;
     }
     
-    // FLUSH method.
-    // Returns true on success, false on failure.
+    
+    /**
+     * FLUSH : delete all keys from the server.
+     * 
+     * @param   int   Delay, in seconds. [optional: default is 0]
+     * @return  bool  True on success, false on failure.
+     */
     
     public function flush($delay = 0)
     {
@@ -259,8 +374,12 @@ class MemcachedClient extends SimpleSocketClient
         return ($response === 'OK') ? true : false;
     }
     
-    // STATS method.
-    // Returns an array containing statistics data.
+    
+    /**
+     * STATS : display statistics about the server.
+     * 
+     * @return  array  An array containing server statistics.
+     */
     
     public function stats()
     {
@@ -290,5 +409,80 @@ class MemcachedClient extends SimpleSocketClient
         // Return.
         
         return $return;
+    }
+    
+    
+    /**
+     * Serialization and compression subroutine.
+     * 
+     * This method produces flags compatible with the Memcached extension.
+     * 
+     * @param   mixed  The data to serialize and/or compress.
+     * @return  array  An array with 0 => flags, 1 => data.
+     */
+    
+    private function encode($data)
+    {
+        // Initialize the return array.
+        
+        $return = array(0, $data);
+        
+        // If the data is not scalar, serialize it.
+        
+        if (!is_scalar($return[1]))
+        {
+            $return[0] += 4;
+            $return[1] = serialize($return[1]);
+        }
+        
+        // If the data is bigger than 128 bytes, compress it.
+        
+        if (strlen($return[1]) >= 128)
+        {
+            $return[0] += 16;
+            $return[1] = gzcompress($return[1]);
+        }
+        
+        // Return.
+        
+        return $return;
+    }
+    
+    
+    /**
+     * Unserialization and decompression subroutine.
+     * 
+     * This method can parse flags produced by the default configurations of
+     * either the Memcached extension or the Memcache extension, though
+     * it *may* fail if an unconventional configuration was used.
+     * 
+     * @param   string  The data to unserialize and/or decompress.
+     * @param   int     The flag returned from the server.
+     * @return  string  The processed data.
+     */
+    
+    private function decode($data, $flag)
+    {
+        // Cast the flag to int.
+        
+        $flag = (int)$flag;
+        
+        // If the compression bit is set, decompress the data.
+        
+        if ($flag & 16 || $flag & 2)
+        {
+            $data = gzuncompress($data);
+        }
+        
+        // If the serialization bit is set, unserialize the data.
+        
+        if ($flag & 4 || $flag & 1)
+        {   
+            if (!is_numeric($data)) $data = unserialize($data);
+        }
+        
+        // Return the data.
+        
+        return $data;
     }
 }

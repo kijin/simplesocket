@@ -1,7 +1,12 @@
-A Simple Socket Client for PHP 5.2+
 
-This class implements a generic socket client. It can be extended to
-create client libraries working with text-based protocols.
+A Simple Socket Client for PHP 5.2+
+===================================
+
+This library contains one class, SimpleSocketClient, that implements a generic
+socket client. You can inherit this class to write client libraries for any
+modern text-based protocol.
+
+Fully featured client libraries for Memcached and Redis are bundled as examples.
 
 Features:
 
