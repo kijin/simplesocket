@@ -10,7 +10,7 @@
  * as well as basic key validation and command building helper methods.
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.2
+ * Version: 0.1.3
  * 
  * Copyright (c) 2010, Kijin Sung <kijinbear@gmail.com>
  * 
@@ -85,6 +85,10 @@ class SimpleSocketClient
         // If already connected, return true.
         
         if ($this->con !== null && $this->con !== false) return true;
+        
+        // If a connection attempt had failed, return false.
+        
+        if ($this->con === false) return false;
         
         // Attempt to connect.
         
