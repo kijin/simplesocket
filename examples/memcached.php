@@ -54,6 +54,25 @@ require_once(dirname(__FILE__) . '/../simplesocketclient.php');
 class MemcachedClient extends SimpleSocketClient
 {
     /**
+     * Configuration.
+     */
+    
+    private $compression = 256;
+    
+    
+    /**
+     * Set compression threshold.
+     */
+    
+    public function set_compression($threshold = 256)
+    {
+        // Save to instance, or false if an invalid value has been given.
+        
+        $this->compression = (int)$threshold ? (int)$threshold : false;
+    }
+    
+    
+    /**
      * GET : Retrieve an item from the server.
      * 
      * @param   string  The key.
@@ -571,7 +590,7 @@ class MemcachedClient extends SimpleSocketClient
         
         // If the data is bigger than 128 bytes, compress it.
         
-        if (strlen($return[1]) >= 128)
+        if (strlen($return[1]) >= 128 && $this->compression)
         {
             $return[0] += 16;
             $return[1] = gzcompress($return[1]);
