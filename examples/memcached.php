@@ -24,7 +24,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.2
+ * Version: 0.1.3
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -57,10 +57,11 @@ class MemcachedClient extends SimpleSocketClient
      * GET : Retrieve an item from the server.
      * 
      * @param   string  The key.
+     * @param   float   The variable to store the CAS token. [optional]
      * @return  mixed   The value, or false if the key does not exist.
      */
     
-    public function get($key)
+    public function get($key, &$cas_token = false)
     {
         // If the key is an array, pass on to getmulti().
         
@@ -76,7 +77,8 @@ class MemcachedClient extends SimpleSocketClient
         {
             // Write the command.
             
-            $this->write('get ' . $key);
+            $command = ($cas_token !== false) ? 'gets ' : 'get ';
+            $this->write($command . $key);
             
             // Read the response.
             
@@ -86,8 +88,10 @@ class MemcachedClient extends SimpleSocketClient
             // Parse the response.
             
             $response = explode(' ', $response);
+            if ($response[0] != 'VALUE') return false;
             $flag = $response[2];
             $length = $response[3];
+            $cas_token = isset($response[4]) ? $response[4] : null;
             
             // Read the data.
             
@@ -265,6 +269,24 @@ class MemcachedClient extends SimpleSocketClient
     
     
     /**
+     * CAS : Check and Set an item in the server.
+     * 
+     * @param   float   The CAS token.
+     * @param   string  The key.
+     * @param   mixed   The value.
+     * @param   int     Expiry, in seconds.
+     * @return  bool    True on success, false on failure.
+     */
+    
+    public function cas($cas_token, $key, $value, $expiry = 0)
+    {
+        // Call the common subroutine.
+        
+        return $this->store('cas', $key, $value, $expiry, $cas_token);
+    }
+    
+    
+    /**
      * Common subroutine for set(), add(), replace(), append(), prepend().
      * 
      * @param   string  The command.
@@ -274,7 +296,7 @@ class MemcachedClient extends SimpleSocketClient
      * @return  bool    True on success, false on failure.
      */
     
-    private function store($command, $key, $value, $expiry)
+    private function store($command, $key, $value, $expiry, $cas_token = null)
     {
         // Validate the key.
         
@@ -291,6 +313,7 @@ class MemcachedClient extends SimpleSocketClient
             // Write the command and the value together.
             
             $command = $this->build_command($command, $key, $flag, $expiry, strlen($value));
+            if ($cas_token !== null) $command .= ' ' . $cas_token;
             $this->write($command . "\r\n" . $value . "\r\n", false);
             
             // Read the response.
