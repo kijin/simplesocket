@@ -6,7 +6,8 @@ This library contains one class, SimpleSocketClient, that implements a generic
 socket client. You can inherit this class to write client libraries for any
 modern text-based protocol.
 
-Fully featured client libraries for Memcached and Redis are bundled as examples.
+Fully featured client libraries for Memcached and Redis, as well as a simple
+HTTP/1.1 client, are bundled as examples.
 
 Features:
 

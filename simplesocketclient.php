@@ -10,7 +10,7 @@
  * as well as basic key validation and command building helper methods.
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.3
+ * Version: 0.1.4
  * 
  * Copyright (c) 2010, Kijin Sung <kijinbear@gmail.com>
  * 
@@ -141,12 +141,11 @@ class SimpleSocketClient
      * 
      * @param   int        The number of bytes to read, or -1 to read until EOF.
      * @param   bool       Whether or not to read CRLF at the end, too. [optional: default is true]
-     * @param   bool       Whether or not to strip CRLF from the end of the response. [optional: default is true]
      * @return  string     Data read from the socket.
      * @throws  Exception  If an error occurs while reading from the socket.
      */
     
-    protected function read($bytes = -1, $autonewline = true, $trim = true)
+    protected function read($bytes = -1, $autonewline = true)
     {
         // If not connected yet, connect now.
         
@@ -156,13 +155,13 @@ class SimpleSocketClient
             throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port);
         }
         
-        // If $autonewline is true, read 2 more bytes.
-        
-        if ($autonewline && $bytes !== -1) $bytes += 2;
-        
-        // Read from the socket.
+        // Read the data from the socket.
         
         $data = @stream_get_contents($this->con, $bytes);
+        
+        // If $autonewline is true, read 2 more bytes.
+        
+        if ($autonewline && $bytes !== -1) @stream_get_contents($this->con, 2);
         
         // If the result is false, throw an exception.
         
@@ -172,9 +171,8 @@ class SimpleSocketClient
             throw new Exception('Cannot read ' . $bytes . ' bytes from ' . $this->host . ' port ' . $this->port);
         }
         
-        // Otherwise, trim and return the data.
+        // Otherwise, return the data.
         
-        if ($trim && substr($data, strlen($data) - 2) === "\r\n") $data = substr($data, 0, strlen($data) - 2);
         return $data;
     }
     
