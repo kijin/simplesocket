@@ -9,24 +9,47 @@
  * 
  * Supported Features:
  *   - Automatic detection of Redis version.
- *   - Multi-bulk commands. (Only available with Redis 1.1+)
+ *   - Automatic serialization of non-scalar values.
+ *   - Automatic compression of large values (disabled by default).
+ *   - Streaming of large result sets for significant memory savings.
+ *   - Multi-bulk commands (only available with Redis 1.1+).
  *   - Support for possible new commands using the multi-bulk format.
  * 
  * Unsupported Features:
  *   - Monitor command.
  *   - Key distribution and load balancing.
  * 
+ * Auto-detection of Redis version is done through an INFO command. This library
+ * will send an INFO command the first time a post-1.0 command is attempted.
+ * If you do not want this, you can force this library to assume a particular
+ * Redis version, by calling set_redis_version(1.2) or similar.
+ * 
  * If you attempt to use a command that is not supported by your version of
  * Redis, you will get an Exception. The same is true for most server error
- * conditions; it is your responsibility to catch those exceptions.
+ * conditions; it is your responsibility to catch those exceptions and take
+ * appropriate actions.
  * 
+ * For compatibility with other client libraries, compression is disabled by
+ * default. If you want to enable compression, call set_compression($threshold).
+ * Any value with a size greater than the threshold will be gzipped on the fly.
+ * If called without an argument, set_compression will assume a 1KB threshold.
+ * 
+ * Several commands, such as keys() and mget(), are also available with a 
+ * streaming version, such as keys_stream() and mget_stream(). These methods
+ * will return a RedisStream object, on which you can call fetch() to get each
+ * value in the result set. Note that you must fetch all values before sending
+ * another command through the same socket, or else call RedisStream::close()
+ * to disconnect and reconnect. Otherwise, subsequence commands may exhibit
+ * unexpected behavior because unfetched data would be clogging the pipe.
+ * 
+ * This library does not support multiple servers, nor any distribution method.
  * If you want to distribute keys across several Redis instances, use a more
  * fully featured client library (there are quite a few out there, you know);
  * or use this library in combination with your own key distribution algorithm.
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.2
+ * Version: 0.1.4
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -61,7 +84,7 @@ class RedisClient extends SimpleSocketClient
     private $redis_version = false;
     
     
-    // Set compression threshold.
+    // Set compression threshold. Default: 1KB.
     
     public function set_compression($threshold = 1024)
     {
@@ -161,13 +184,25 @@ class RedisClient extends SimpleSocketClient
     
     // KEYS method.
     
-    public function keys($pattern)
+    public function keys($pattern = '*')
     {
         // Expect: bulk (convert to array).
         
         $this->validate_key($pattern);
         $this->write('KEYS ' . $pattern);
         return explode(' ', (string)$this->get_response());
+    }
+    
+    
+    // KEYS method (streaming version).
+    
+    public function keys_stream($pattern = '*')
+    {
+        // Expect: bulk.
+        
+        $this->validate_key($pattern);
+        $this->write('KEYS ' . $pattern);
+        return new RedisStream($this, $this->con, 'keys');
     }
     
     
@@ -226,6 +261,26 @@ class RedisClient extends SimpleSocketClient
             $return[$keys[$i]] = $this->decode($response[$i]);
         }
         return $return;
+    }
+    
+    
+    // MGET method (streaming version).
+    
+    public function mget_stream($keys)
+    {
+        // Validate the keys.
+        
+        foreach ($keys as $key) $this->validate_key($key);
+        
+        // If no keys are supplied, return an empty array.
+        
+        $count = count($keys);
+        if (!$count) return array();
+        
+        // Expect: multi-bulk.
+        
+        $this->write('MGET ' . implode(' ', $keys));
+        return new RedisStream($this, $this->con, 'multi-bulk');
     }
     
     
@@ -505,6 +560,19 @@ class RedisClient extends SimpleSocketClient
     }
     
     
+    // LRANGE method (streaming version).
+    
+    public function lrange_stream($key, $start, $end)
+    {
+        // Expect: multi-bulk.
+        
+        $this->validate_key($key);
+        $command = $this->build_command('LRANGE', $key, (int)$start, (int)$end);
+        $this->write($command);
+        return new RedisStream($this, $this->con, 'multi-bulk');
+    }
+    
+    
     // LTRIM method.
     
     public function ltrim($key, $start, $end)
@@ -752,6 +820,22 @@ class RedisClient extends SimpleSocketClient
     }
     
     
+    // SINTER method (streaming version).
+    
+    public function sinter_stream( /* keys */ )
+    {
+        // Flatten the arguments.
+        
+        $args = func_get_args();
+        $keys = $this->array_flatten($args);
+        
+        // Expect: multi-bulk.
+        
+        $this->write('SINTER ' . implode(' ', $keys));
+        return new RedisStream($this, $this->con, 'multi-bulk');
+    }
+    
+    
     // SINTERSTORE method.
     
     public function sinterstore($destination /* keys */ )
@@ -782,6 +866,22 @@ class RedisClient extends SimpleSocketClient
         
         $this->write('SUNION ' . implode(' ', $keys));
         return $this->decode($this->get_response());
+    }
+    
+    
+    // SUNION method (streaming version).
+    
+    public function sunion_stream( /* keys */ )
+    {
+        // Flatten the arguments.
+        
+        $args = func_get_args();
+        $keys = $this->array_flatten($args);
+        
+        // Expect: multi-bulk.
+        
+        $this->write('SUNION ' . implode(' ', $keys));
+        return new RedisStream($this, $this->con, 'multi-bulk');
     }
     
     
@@ -818,6 +918,22 @@ class RedisClient extends SimpleSocketClient
     }
     
     
+    // SDIFF method (streaming version).
+    
+    public function sdiff_stream( /* keys */ )
+    {
+        // Flatten the arguments.
+        
+        $args = func_get_args();
+        $keys = $this->array_flatten($args);
+        
+        // Expect: multi-bulk.
+        
+        $this->write('SDIFF ' . implode(' ', $keys));
+        return new RedisStream($this, $this->con, 'multi-bulk');
+    }
+    
+    
     // SDIFFSTORE method.
     
     public function sdiffstore($destination /* keys */ )
@@ -847,6 +963,18 @@ class RedisClient extends SimpleSocketClient
     }
     
     
+    // SMEMBERS method (streaming version).
+    
+    public function smembers_stream($key)
+    {
+        // Expect: multi-bulk.
+        
+        $this->validate_key($key);
+        $this->write('SMEMBERS ' . $key);
+        return new RedisStream($this, $this->con, 'multi-bulk');
+    }
+    
+    
     // SRANDMEMBER method.
     
     public function srandmember($key)
@@ -873,8 +1001,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: integer (cast to bool).
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZADD', $key, $score, $this->encode($member)));
-        if (!$mbc) return false;
+        $this->multi_bulk_command(array('ZADD', $key, $score, $this->encode($member)));
         return (bool)$this->get_response();
     }
     
@@ -893,8 +1020,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: integer (cast to bool).
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZREM', $key, $score, $this->encode($member)));
-        if (!$mbc) return false;
+        $this->multi_bulk_command(array('ZREM', $key, $score, $this->encode($member)));
         return (bool)$this->get_response();
     }
     
@@ -913,8 +1039,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: integer.
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZINCRBY', $key, $increment, $this->encode($member)));
-        if (!$mbc) return false;
+        $this->multi_bulk_command(array('ZINCRBY', $key, $increment, $this->encode($member)));
         return $this->get_response();
     }
     
@@ -935,8 +1060,7 @@ class RedisClient extends SimpleSocketClient
         $this->validate_key($key);
         $command = $reverse ? 'ZREVRANGE' : 'ZRANGE';
         $command = $with_scores ? array($command, $key, $start, $end, 'WITHSCORES'): array($command, $key, $start, $end);
-        $mbc = $this->multi_bulk_command($command);
-        if (!$mbc) return false;
+        $this->multi_bulk_command($command);
         
         // Return with scores.
         
@@ -961,9 +1085,9 @@ class RedisClient extends SimpleSocketClient
     }
     
     
-    // ZREVRANGE method. (Redis 1.1+)
+    // ZRANGE method : streaming version. (Redis 1.1+)
     
-    public function zrevrange($key, $start, $end, $with_scores)
+    public function zrange_stream($key, $start, $end, $reverse = false)
     {
         // Check Redis version.
         
@@ -972,9 +1096,33 @@ class RedisClient extends SimpleSocketClient
             throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
         }
         
+        // Write the command. (Expect: multi-bulk)
+        
+        $this->validate_key($key);
+        $command = $reverse ? 'ZREVRANGE' : 'ZRANGE';
+        $command = array($command, $key, $start, $end);
+        $this->multi_bulk_command($command);
+        return new RedisStream($this, $this->con, 'multi-bulk');
+    }
+    
+    
+    // ZREVRANGE method. (Redis 1.1+)
+    
+    public function zrevrange($key, $start, $end, $with_scores)
+    {
         // Call zrange() with $reverse = true.
         
         return $this->zrange($key, $start, $end, $with_scores, true);
+    }
+    
+    
+    // ZREVRANGE method : streaming version. (Redis 1.1+)
+    
+    public function zrevrange_stream($key, $start, $end)
+    {
+        // Call zrange() with $reverse = true.
+        
+        return $this->zrange_stream($key, $start, $end, true);
     }
     
     
@@ -1000,12 +1148,41 @@ class RedisClient extends SimpleSocketClient
         {
             $command = array('ZRANGEBYSCORE', $key, $min, $max);
         }
-        $mbc = $this->multi_bulk_command($command);
-        if (!$mbc) return false;
+        $this->multi_bulk_command($command);
         
         // Expect: multi-bulk.
         
         return $this->decode($this->get_response());
+    }
+    
+    
+    // ZRANGEBYSCORE method : streaming version. (Redis 1.1+)
+    
+    public function zrangebyscore_stream($key, $min, $max, $offset = false, $count = false)
+    {
+        // Check Redis version.
+        
+        if ($this->get_redis_version() < 1.1)
+        {
+            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+        }
+        
+        // Write the command.
+        
+        $this->validate_key($key);
+        if ((int)$offset && (int)$count)
+        {
+            $command = array('ZRANGEBYSCORE', $key, $min, $max, 'LIMIT', (int)$offset, (int)$count);
+        }
+        else
+        {
+            $command = array('ZRANGEBYSCORE', $key, $min, $max);
+        }
+        $this->multi_bulk_command($command);
+        
+        // Expect: multi-bulk.
+        
+        return new RedisStream($this, $this->con, 'multi-bulk');
     }
     
     
@@ -1023,8 +1200,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: integer.
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZREMRANGEBYSCORE', $key, $min, $max));
-        if (!$mbc) return false;
+        $this->multi_bulk_command(array('ZREMRANGEBYSCORE', $key, $min, $max));
         return $this->get_response();
     }
     
@@ -1062,8 +1238,7 @@ class RedisClient extends SimpleSocketClient
         // Expect: bulk.
         
         $this->validate_key($key);
-        $mbc = $this->multi_bulk_command(array('ZSCORE', $key, $this->encode($member)));
-        if (!$mbc) return false;
+        $this->multi_bulk_command(array('ZSCORE', $key, $this->encode($member)));
         return $this->get_response();
     }
     
@@ -1076,11 +1251,27 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         if (preg_match('[^\x21-\xfe]', $conditions)) throw new Exception('Illegal character in conditions: ' . $conditions);
-    
+        
         // Expect: multi-bulk.
         
         $this->write('SORT ' . $key . ' ' . $conditions . "\r\n", false);
         return $this->get_response();
+    }
+    
+    
+    // SORT method (streaming version).
+    
+    public function sort_stream($key, $conditions = '')
+    {
+        // Validate the key and the conditions.
+        
+        $this->validate_key($key);
+        if (preg_match('[^\x21-\xfe]', $conditions)) throw new Exception('Illegal character in conditions: ' . $conditions);
+        
+        // Expect: multi-bulk.
+        
+        $this->write('SORT ' . $key . ' ' . $conditions . "\r\n", false);
+        return new RedisStream($this, $this->con, 'multi-bulk');
     }
     
     
@@ -1389,7 +1580,7 @@ class RedisClient extends SimpleSocketClient
     
     // Serialization and compression subroutine.
     
-    private function encode($data)
+    public function encode($data)
     {
         // If the data is not scalar, serialize it.
         
@@ -1413,7 +1604,7 @@ class RedisClient extends SimpleSocketClient
     
     // Unserialization and decompression subroutine.
     
-    private function decode($data)
+    public function decode($data)
     {
         // If the data is an array, decode recursively.
         
@@ -1444,5 +1635,158 @@ class RedisClient extends SimpleSocketClient
         // Return the data.
         
         return $data;
+    }
+}
+
+
+/**
+ * Redis Stream Class.
+ * 
+ * An instance of this class is returned when the streaming version of a
+ * command is called, such as keys_stream() or mget_stream(). Every command that
+ * returns a multi-bulk reply has a streaming version. When you use those
+ * commands, call fetch() on the RedisStream object until that method returns
+ * a boolean false. (Note that mget() might return null on a nonexistent key,
+ * so it is your responsibility to distinguish that from a boolean false.)
+ * Note that you must fetch all values before sending another command through
+ * the same socket, or else call close() to disconnect and reconnect. Otherwise,
+ * subsequence commands may exhibit unexpected behavior because unfetched data
+ * would be clogging the pipe.
+ */
+
+class RedisStream extends SimpleSocketClient
+{
+    // Protected properties.
+    
+    protected $caller = null;
+    protected $type = '';
+    
+    protected $buffer = '';
+    protected $current = 0;
+    protected $total = false;
+    
+    
+    // Constructor override.
+    
+    public function __construct($caller, $con, $type)
+    {
+        // Store in instance, overriding $con in particular.
+        
+        $this->caller = $caller;
+        $this->con = $con;
+        $this->type = $type;
+    }
+    
+    
+    // Fetch method.
+    
+    public function fetch()
+    {
+        // Different behavior by command type.
+        
+        switch ($this->type)
+        {
+            // KEYS: bulk reply, byte pointer, array buffer.
+            
+            case 'keys':
+                
+                // First call only: get the total size of the response.
+                
+                if ($this->total === false)
+                {
+                    $firstline = $this->readline();
+                    if (!strlen($firstline) || $firstline[0] !== '$')
+                    {
+                        $this->disconnect();
+                        $this->total = 0;
+                    }
+                    $this->total = (substr($firstline, 1) > 0) ? substr($firstline, 1) : 0;
+                }
+                
+                // If the buffer is not empty, return the first item.
+                
+                if (is_array($this->buffer) && count($this->buffer)) return array_shift($this->buffer);
+                
+                // If the pointer is already at the end, return false.
+                
+                if ($this->current >= $this->total) return false;
+                
+                // Otherwise, fetch the next 8KB or until the end of the response.
+                
+                $length = 8192;
+                if ($this->current + $length >= $this->total) $length = ($this->total - $this->current) + 2;
+                $this->buffer = @stream_get_contents($this->con, $length);
+                
+                // If the last byte of the buffer isn't a space, keep reading until we get a space.
+                
+                while (!ctype_space($this->buffer[$length - 1]))
+                {
+                    $add = fgetc($this->con);
+                    if ($add === false) break;
+                    $this->buffer .= $add;
+                    $length++;
+                }
+                
+                // Increment the pointer.
+                
+                $this->current += $length;
+                
+                // Parse into an array.
+                
+                $this->buffer = explode(' ', rtrim($this->buffer));
+                
+                // Return the first element.
+                
+                return array_shift($this->buffer);
+            
+            // MULTI-BULK: bulk-by-bulk pointer, no buffer.
+            
+            case 'multi-bulk':
+            
+                // First call only: get the length of the response.
+                
+                if ($this->total === false)
+                {
+                    $firstline = $this->readline();
+                    if (!strlen($firstline) || $firstline[0] !== '*')
+                    {
+                        $this->disconnect();
+                        $this->total = 0;
+                    }
+                    $this->total = (substr($firstline, 1) > 0) ? substr($firstline, 1) : 0;
+                }
+                
+                // If the pointer is already at the end, return false.
+                
+                if ($this->current >= $this->total) return false;
+                
+                // Otherwise, fetch the next bulk.
+                
+                $bulk_header = $this->readline();
+                $bulk_length = (int)substr($bulk_header, 1);
+                $bulk_body = ($bulk_length < 0) ? null : $this->caller->decode($this->read($bulk_length));
+                
+                // Increment the counter.
+                
+                $this->current++;
+                
+                // Return the bulk body, or null if the bulk doesn't exist.
+                
+                return $bulk_body;
+
+            // Default.
+            
+            default: return false;
+        }
+    }
+    
+    
+    // Close method.
+    
+    public function close()
+    {
+        // Disconnect.
+        
+        $this->caller->disconnect();
     }
 }
