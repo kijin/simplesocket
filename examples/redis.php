@@ -49,7 +49,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.4
+ * Version: 0.1.5
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -1663,7 +1663,7 @@ class RedisStream extends SimpleSocketClient
     
     protected $buffer = '';
     protected $current = 0;
-    protected $total = false;
+    protected $total = 0;
     
     
     // Constructor override.
@@ -1675,6 +1675,16 @@ class RedisStream extends SimpleSocketClient
         $this->caller = $caller;
         $this->con = $con;
         $this->type = $type;
+        
+        // Get the total size of the response.
+        
+        $firstline = $this->readline();
+        if (!strlen($firstline) || ($type === 'keys' && $firstline[0] !== '$') || ($type === 'multi-bulk' && $firstline[0] !== '*'))
+        {
+            $this->disconnect();
+            $this->total = 0;
+        }
+        $this->total = (substr($firstline, 1) > 0) ? substr($firstline, 1) : 0;
     }
     
     
@@ -1689,19 +1699,6 @@ class RedisStream extends SimpleSocketClient
             // KEYS: bulk reply, byte pointer, array buffer.
             
             case 'keys':
-                
-                // First call only: get the total size of the response.
-                
-                if ($this->total === false)
-                {
-                    $firstline = $this->readline();
-                    if (!strlen($firstline) || $firstline[0] !== '$')
-                    {
-                        $this->disconnect();
-                        $this->total = 0;
-                    }
-                    $this->total = (substr($firstline, 1) > 0) ? substr($firstline, 1) : 0;
-                }
                 
                 // If the buffer is not empty, return the first item.
                 
@@ -1743,19 +1740,6 @@ class RedisStream extends SimpleSocketClient
             
             case 'multi-bulk':
             
-                // First call only: get the length of the response.
-                
-                if ($this->total === false)
-                {
-                    $firstline = $this->readline();
-                    if (!strlen($firstline) || $firstline[0] !== '*')
-                    {
-                        $this->disconnect();
-                        $this->total = 0;
-                    }
-                    $this->total = (substr($firstline, 1) > 0) ? substr($firstline, 1) : 0;
-                }
-                
                 // If the pointer is already at the end, return false.
                 
                 if ($this->current >= $this->total) return false;
