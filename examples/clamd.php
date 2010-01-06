@@ -32,7 +32,7 @@
  * }
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.4
+ * Version: 0.1.5
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');

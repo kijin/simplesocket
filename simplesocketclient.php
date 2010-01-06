@@ -10,7 +10,7 @@
  * as well as basic key validation and command building helper methods.
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.4
+ * Version: 0.1.5
  * 
  * Copyright (c) 2010, Kijin Sung <kijinbear@gmail.com>
  * 
