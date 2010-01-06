@@ -24,7 +24,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.3
+ * Version: 0.1.5
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -588,9 +588,9 @@ class MemcachedClient extends SimpleSocketClient
             $return[1] = serialize($return[1]);
         }
         
-        // If the data is bigger than 128 bytes, compress it.
+        // If the data is bigger than the compression threshold, compress it.
         
-        if (strlen($return[1]) >= 128 && $this->compression)
+        if ($this->compression > 0 && strlen($return[1]) >= $this->compression)
         {
             $return[0] += 16;
             $return[1] = gzcompress($return[1]);
