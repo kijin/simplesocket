@@ -53,8 +53,8 @@ class SimpleSocketClient
      * 
      * Host and port must be supplied at the time of instantiation.
      * 
-     * @param  string  The hostname or the IP address of the server.
-     * @param  int     The port of the server.
+     * @param  string  The hostname, IP address, or UNIX socket for the server.
+     * @param  int     The port of the server, or false for UNIX sockets.
      * @param  int     Connection timeout in seconds. [optional: default is 5]
      */
     
@@ -62,7 +62,10 @@ class SimpleSocketClient
     {
         // A quick check for IPv6 addresses (with colon).
         
-        if (strpos($host, ':') !== false) $host = '[' . $host . ']';
+        if (strpos($host, ':') !== false && strpos($host, '[') === false)
+        {
+            $host = '[' . $host . ']';
+        }
         
         // Keep the connection info, but don't connect now.
         
@@ -90,9 +93,20 @@ class SimpleSocketClient
         
         if ($this->con === false) return false;
         
+        // Get the host:port or socket name.
+        
+        if ($this->port === false)
+        {
+            $socket = 'unix://' . $this->host;
+        }
+        else
+        {
+            $socket = $this->host . ':' . $this->port;
+        }
+        
         // Attempt to connect.
         
-        $this->con = @stream_socket_client($this->host . ':' . $this->port, $errno, $errstr, $this->timeout);
+        $this->con = @stream_socket_client($socket, $errno, $errstr, $this->timeout);
         
         // If there's an error, set $con to false, and throw an exception.
         
