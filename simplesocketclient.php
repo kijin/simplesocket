@@ -10,7 +10,7 @@
  * as well as basic key validation and command building helper methods.
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.5
+ * Version: 0.1.6
  * 
  * Copyright (c) 2010, Kijin Sung <kijinbear@gmail.com>
  * 
@@ -159,7 +159,7 @@ class SimpleSocketClient
      * @throws  Exception  If an error occurs while reading from the socket.
      */
     
-    protected function read($bytes = -1, $autonewline = true)
+    public function read($bytes = -1, $autonewline = true)
     {
         // If not connected yet, connect now.
         
@@ -204,7 +204,7 @@ class SimpleSocketClient
      * @throws  Exception  If an error occurs while reading from the socket.
      */
         
-    protected function readline($trim = true)
+    public function readline($trim = true)
     {
         // If not connected yet, connect now.
         
@@ -247,7 +247,7 @@ class SimpleSocketClient
      * @throws  Exception  If an error occurs while reading from the socket.
      */
         
-    protected function write($string, $autonewline = true)
+    public function write($string, $autonewline = true)
     {
         // If not connected yet, connect now.
         
@@ -305,7 +305,7 @@ class SimpleSocketClient
      * @throws  Exception  If the key is invalid.
      */
     
-    protected function validate_key($key)
+    public function validate_key($key)
     {
         // Empty?
         
@@ -336,7 +336,7 @@ class SimpleSocketClient
      * @return  string  The concatenated string.
      */
     
-    protected function build_command( /* arguments */ )
+    public function build_command( /* arguments */ )
     {
         // Fetch all the arguments.
         
