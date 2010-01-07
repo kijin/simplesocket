@@ -49,7 +49,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.5
+ * Version: 0.1.6
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -1061,33 +1061,13 @@ class RedisClient extends SimpleSocketClient
         $command = $reverse ? 'ZREVRANGE' : 'ZRANGE';
         $command = $with_scores ? array($command, $key, $start, $end, 'WITHSCORES'): array($command, $key, $start, $end);
         $this->multi_bulk_command($command);
-        
-        // Return with scores.
-        
-        if ($with_scores)
-        {
-            $raw = $this->get_response();
-            $count = count($raw);
-            $return = array();
-            for ($i = 0; $i < $count; $i += 2)
-            {
-                $return[$raw[$i]] = $this->decode($return[$raw[$i + 1]]);
-            }
-            return $return;
-        }
-        
-        // Return plain elements.
-        
-        else
-        {
-            return $this->decode($this->get_response());
-        }
+        return $this->decode($this->get_response());
     }
     
     
     // ZRANGE method : streaming version. (Redis 1.1+)
     
-    public function zrange_stream($key, $start, $end, $reverse = false)
+    public function zrange_stream($key, $start, $end, $with_scores = false, $reverse = false)
     {
         // Check Redis version.
         
@@ -1100,7 +1080,7 @@ class RedisClient extends SimpleSocketClient
         
         $this->validate_key($key);
         $command = $reverse ? 'ZREVRANGE' : 'ZRANGE';
-        $command = array($command, $key, $start, $end);
+        $command = $with_scores ? array($command, $key, $start, $end, 'WITHSCORES'): array($command, $key, $start, $end);
         $this->multi_bulk_command($command);
         return new RedisStream($this, $this->con, 'multi-bulk');
     }
@@ -1118,11 +1098,11 @@ class RedisClient extends SimpleSocketClient
     
     // ZREVRANGE method : streaming version. (Redis 1.1+)
     
-    public function zrevrange_stream($key, $start, $end)
+    public function zrevrange_stream($key, $start, $end, $with_scores = false)
     {
         // Call zrange() with $reverse = true.
         
-        return $this->zrange_stream($key, $start, $end, true);
+        return $this->zrange_stream($key, $start, $end, $with_scores, true);
     }
     
     
@@ -1685,6 +1665,20 @@ class RedisStream extends SimpleSocketClient
             $this->total = 0;
         }
         $this->total = (substr($firstline, 1) > 0) ? substr($firstline, 1) : 0;
+    }
+    
+    
+    // Count method.
+    
+    public function count()
+    {
+        // If KEYS, return false.
+        
+        if ($this->type === 'keys') return false;
+        
+        // Otherwise, return the total size of the response.
+        
+        return $this->total;
     }
     
     
