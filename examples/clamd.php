@@ -32,7 +32,7 @@
  * }
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.5
+ * Version: 0.1.6
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -59,7 +59,7 @@ require_once(dirname(__FILE__) . '/../simplesocketclient.php');
  * THE SOFTWARE.
  */
 
-class ClamdClient extends SimpleSocketClient
+class ClamdClient
 {
     // Class constants.
     
@@ -68,6 +68,13 @@ class ClamdClient extends SimpleSocketClient
     const ERROR = 2;
     
     
+    // Host, port, and timeout.
+    
+    private $host = '';
+    private $port = 0;
+    private $timeout = 0;
+    
+
     // Information about the last scan.
     
     private $last_virus = '';
@@ -125,10 +132,11 @@ class ClamdClient extends SimpleSocketClient
         
         // Connect to clamd, send the SCAN command, read the response, and disconnect.
         
-        $this->connect();
-        $this->write('SCAN ' . $filename);
-        $response = trim($this->readline());
-        $this->disconnect();
+        $socket = new SimpleSocketClient($this->host, $this->port, $this->timeout);
+        $socket->write('SCAN ' . $filename);
+        $response = $socket->readline();
+        $response = trim($response);
+        $socket->disconnect();
         
         // If the response starts with the filename, it's a valid response.
         

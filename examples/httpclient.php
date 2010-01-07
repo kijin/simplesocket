@@ -11,8 +11,26 @@
  * gzipped data. The get() and post() methods return the response body;
  * headers and cookies can be accessed by calling other methods afterwards.
  * 
+ * Example:
+ * 
+ * $client = new HttpClient($url);
+ * $client->add_form('title', $title);
+ * $client->add_form('content', $content);
+ * $client->add_file('attachment', $filename);
+ * $client->add_cookie('cookie_name', $cookie_value);
+ * $client->set_referer($referer);
+ * $client->post();
+ * 
+ * if ($client->get_response_code() == 200)
+ * {
+ *     $body = $client->get_response_body();
+ *     $type = $client->get_response_content_type();
+ *     $charset = $client->get_response_charset();
+ *     $cookies = $client->get_response_cookies();
+ * }
+ * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.4
+ * Version: 0.1.6
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -43,6 +61,7 @@ class HttpClient extends SimpleSocketClient
 {
     // Information about the client.
     
+    private $url = false;
     private $user_agent = 'Mozilla/5.0 (compatible; HttpClient/0.1.4)';
     private $referer = '';
     private $proxy_host = '';
@@ -75,11 +94,23 @@ class HttpClient extends SimpleSocketClient
     private $response_date = '';
     
     
-    // Constructor override.
+    // Constructor.
     
-    public function __construct()
+    public function __construct($url = false)
     {
+        // Save the URL.
         
+        $this->url = $url;
+    }
+    
+    
+    // Set the request timeout.
+    
+    public function set_timeout($timeout)
+    {
+        // Sanitize the timeout, and save to instance.
+        
+        $this->timeout = (int)$timeout;
     }
     
     
@@ -318,30 +349,33 @@ class HttpClient extends SimpleSocketClient
     
     // HEAD.
     
-    public function head($url, $payload = false)
+    public function head($url = false, $payload = false)
     {
         // Request.
         
+        if ($url === false) $url = $this->url;
         return $this->request('HEAD', $url, $payload);
     }
     
     
     // GET.
     
-    public function get($url, $payload = false)
+    public function get($url = false, $payload = false)
     {
         // Request.
         
+        if ($url === false) $url = $this->url;
         return $this->request('GET', $url, $payload);
     }
     
     
     // POST.
     
-    public function post($url, $payload = false)
+    public function post($url = false, $payload = false)
     {
         // Request.
         
+        if ($url === false) $url = $this->url;
         return $this->request('POST', $url, $payload);
     }
     
@@ -560,10 +594,9 @@ class HttpClient extends SimpleSocketClient
         
         // Open the socket.
         
-        $this->host = $this->request_host;
-        $this->port = $this->request_port;
-        $this->timeout = 5;
-        if ($this->request_scheme === 'https') $this->host = 'ssl://' . $this->host;
+        $this->host = ($this->request_scheme === 'https' ? 'ssl://' : '') . $this->request_host;
+        $this->port = (int)$this->request_port;
+        $this->timeout = ($this->timeout > 0) ? $this->timeout : 10;
         $this->connect();
         
         // Print the header.
