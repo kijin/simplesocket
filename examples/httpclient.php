@@ -30,7 +30,7 @@
  * }
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.6
+ * Version: 0.1.7
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -637,9 +637,9 @@ class HttpClient extends SimpleSocketClient
         
         // If the payload is a string, just print it.
         
-        else
+        elseif ($length)
         {
-            if ($length) $this->write($payload . "\r\n", false);
+            $this->write($payload . "\r\n", false);
         }
         
         // Clean up.
@@ -725,7 +725,8 @@ class HttpClient extends SimpleSocketClient
             {
                 $pos1 = strpos($value, '=');
                 $pos2 = strpos($value, ';');
-                if ($pos1 !== false && $pos2 !== false)
+                if ($pos2 === false) $pos2 = strlen($value);
+                if ($pos1 !== false)
                 {
                     $cookie_name = substr($value, 0, $pos1);
                     $cookie_value = substr($value, $pos1 + 1, $pos2 - $pos1 - 1);
