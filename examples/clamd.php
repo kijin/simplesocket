@@ -32,7 +32,7 @@
  * }
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.6
+ * Version: 0.1.7
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -118,16 +118,8 @@ class ClamdClient
         
         // Check if the file exists and is readable.
         
-        if (!file_exists($filename)) throw new Exception($filename . ' does not exist');
-        if (!is_readable($filename)) throw new Exception($filename . ' is not readable');
-        
-        // Dereference symbolic links.
-        
-        while (is_link($filename)) $filename = readlink($filename);
-        
-        // Check again that the file is actually a file and is readable.
-        
-        if (!is_file($filename)) throw new Exception($filename . ' is not a file');
+        $filename = realpath($filename);
+        if (!$filename || !file_exists($filename) || !is_file($filename)) throw new Exception($filename . ' does not exist');
         if (!is_readable($filename)) throw new Exception($filename . ' is not readable');
         
         // Connect to clamd, send the SCAN command, read the response, and disconnect.

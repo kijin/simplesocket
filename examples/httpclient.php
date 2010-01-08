@@ -30,7 +30,7 @@
  * }
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.7
+ * Version: 0.1.8
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -196,7 +196,7 @@ class HttpClient extends SimpleSocketClient
     
     // Add a file.
     
-    public function add_file($key, $path, $name = false)
+    public function add_file($key, $filename, $name = false)
     {
         // Sanitize the key.
         
@@ -204,35 +204,27 @@ class HttpClient extends SimpleSocketClient
         
         // If the name is not given, default to the base name of the file.
         
-        if (!$name) $name = basename($path);
+        if (!$name) $name = basename($filename);
         
         // Check if the file exists and is readable.
         
-        if (!file_exists($path)) throw new Exception($path . ' does not exist');
-        if (!is_readable($path)) throw new Exception($path . ' is not readable');
-        
-        // Follow symbolic links.
-        
-        while (is_link($path)) $path = readlink($path);
-        
-        // Check again that the file is actually a file and is readable.
-        
-        if (!is_file($path)) throw new Exception($path . ' is not a file');
-        if (!is_readable($path)) throw new Exception($path . ' is not readable');
+        $filename = realpath($filename);
+        if (!$filename || !file_exists($filename) || !is_file($filename)) throw new Exception($filename . ' does not exist');
+        if (!is_readable($filename)) throw new Exception($filename . ' is not readable');
         
         // Get the file size.
         
-        $size = filesize($path);
+        $size = filesize($filename);
         
         // Save to instance.
         
         if (array_key_exists($key, $this->request_files))
         {
-            $this->request_files[$key][] = array($path, $name, $size);
+            $this->request_files[$key][] = array($filename, $name, $size);
         }
         else
         {
-            $this->request_files[$key] = array(array($path, $name, $size));
+            $this->request_files[$key] = array(array($filename, $name, $size));
         }
     }
     
@@ -648,6 +640,15 @@ class HttpClient extends SimpleSocketClient
         $this->request_cookies = array();
         $this->request_forms = array();
         $this->request_files = array();
+        $this->response_code = '';
+        $this->response_body = '';
+        $this->response_headers = array();
+        $this->response_cookies = array();
+        $this->response_content_type = '';
+        $this->response_charset = '';
+        $this->response_expires = '';
+        $this->response_lastmod = '';
+        $this->response_date = '';
         unset($headers);
         unset($payload);
         unset($boundary);
