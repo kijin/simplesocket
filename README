@@ -25,9 +25,6 @@ Public methods:
   * __construct($host, $port, $timeout = 5)
   * connect()
   * disconnect()
-
-Protected methods:
-
   * read($bytes, $autonewline = true, $trim = true)
   * readline($trim = true)
   * write($string, $autonewline = true)
