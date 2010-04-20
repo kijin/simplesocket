@@ -49,7 +49,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.6
+ * Version: 0.1.7
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -221,10 +221,10 @@ class RedisClient extends SimpleSocketClient
     
     public function get($key)
     {
-        // If the key is an array, pass on to getmulti().
+        // If the key is an array, pass on to mget().
         
-        if (is_array($key)) return $this->getmulti($key);
-
+        if (is_array($key)) return $this->mget($key);
+        
         // Expect: bulk.
         
         $this->validate_key($key);
