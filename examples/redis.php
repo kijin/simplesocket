@@ -44,7 +44,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.2.1
+ * Version: 0.2.2
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -77,6 +77,8 @@ class RedisClient extends SimpleSocketClient
     
     protected $compression = false;
     protected $streaming = false;
+    protected $pipeline_mode = false;
+    protected $pipeline_count = -1;
     protected $last_status = false;
     
     
@@ -84,8 +86,6 @@ class RedisClient extends SimpleSocketClient
     
     public function enableCompression($threshold = 1024)
     {
-        // Save to config.
-        
         $this->compression = (int)$threshold;
     }
     
@@ -94,9 +94,39 @@ class RedisClient extends SimpleSocketClient
     
     public function enableStreaming()
     {
-        // Save to config.
-        
         $this->streaming = true;
+    }
+    
+    
+    // Begin pipeline mode.
+    
+    public function beginPipeline()
+    {
+        if (!$this->pipeline_mode)
+        {
+            $this->pipeline_mode = true;
+            $this->pipeline_count = 0;
+        }
+        else
+        {
+            throw new RedisException('Pipeline mode already in effect.');
+        }
+    }
+    
+    
+    // End pipeline mode.
+    
+    public function endPipeline()
+    {
+        if ($this->pipeline_count < 1)
+        {
+            $this->pipeline_mode = false;
+            $this->pipeline_count = -1;
+        }
+        else
+        {
+            throw new RedisException('All responses must be read before the pipeline can be closed.');
+        }
     }
     
     
@@ -104,8 +134,6 @@ class RedisClient extends SimpleSocketClient
     
     public function getLastStatus()
     {
-        // This is usually 'OK'.
-        
         return $this->last_status;
     }
     
@@ -162,6 +190,10 @@ class RedisClient extends SimpleSocketClient
         
         $this->write($request, false);
         
+        // If in pipeline mode, increment and return the pipeline counter.
+        
+        if ($this->pipeline_mode) return ++$this->pipeline_count;
+        
         // Read the response.
         
         $response = $this->readResponse();
@@ -171,6 +203,7 @@ class RedisClient extends SimpleSocketClient
         switch ($command)
         {
             case 'EXISTS':
+            case 'HEXISTS':
                 return (bool)$response;
                 
             case 'TYPE':
@@ -256,8 +289,13 @@ class RedisClient extends SimpleSocketClient
     
     // Read response method. This method can parse anything that Redis says.
     
-    protected function readResponse()
+    public function readResponse()
     {
+        // If the pipeline is empty, throw an exception. Otherwise, decrement the pipeline counter.
+        
+        if (!$this->pipeline_count) throw new RedisException('No more responses in the pipeline.');
+        $this->pipeline_count--;
+        
         // Grab the first byte of the response to decide which type it is.
         
         $firstline = $this->readline();
@@ -279,7 +317,7 @@ class RedisClient extends SimpleSocketClient
             case '+':
                 
                 $this->last_status = $message;
-                return ($message === 'OK' || $message === 'PONG') ? true : false;
+                return (in_array($message, array('OK', 'PONG', 'QUEUED'))) ? true : false;
             
             // Integer : return the number.
             
