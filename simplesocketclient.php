@@ -10,7 +10,7 @@
  * as well as basic key validation and command building helper methods.
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.6
+ * Version: 0.1.7
  * 
  * Copyright (c) 2010, Kijin Sung <kijinbear@gmail.com>
  * 
@@ -106,14 +106,14 @@ class SimpleSocketClient
         
         // Attempt to connect.
         
-        $this->con = @stream_socket_client($socket, $errno, $errstr, $this->timeout);
+        $this->con = stream_socket_client($socket, $errno, $errstr, $this->timeout);
         
         // If there's an error, set $con to false, and throw an exception.
         
         if (!$this->con)
         {
             $this->con = false;
-            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port . ': ' . $errstr . ' (code ' . $errno . ')');
+            throw new SimpleSocketException('Cannot connect to ' . $this->host . ' port ' . $this->port . ': ' . $errstr . ' (code ' . $errno . ')');
         }
         
         // Return true to indicate success.
@@ -166,23 +166,23 @@ class SimpleSocketClient
         if ($this->con === null) $this->connect();
         if ($this->con === false)
         {
-            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port);
+            throw new SimpleSocketException('Cannot connect to ' . $this->host . ' port ' . $this->port);
         }
         
         // Read the data from the socket.
         
-        $data = @stream_get_contents($this->con, $bytes);
+        $data = stream_get_contents($this->con, $bytes);
         
         // If $autonewline is true, read 2 more bytes.
         
-        if ($autonewline && $bytes !== -1) @stream_get_contents($this->con, 2);
+        if ($autonewline && $bytes !== -1) stream_get_contents($this->con, 2);
         
         // If the result is false, throw an exception.
         
         if ($data === false)
         {
             $this->disconnect();
-            throw new Exception('Cannot read ' . $bytes . ' bytes from ' . $this->host . ' port ' . $this->port);
+            throw new SimpleSocketException('Cannot read ' . $bytes . ' bytes from ' . $this->host . ' port ' . $this->port);
         }
         
         // Otherwise, return the data.
@@ -211,19 +211,19 @@ class SimpleSocketClient
         if ($this->con === null) $this->connect();
         if ($this->con === false)
         {
-            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port);
+            throw new SimpleSocketException('Cannot connect to ' . $this->host . ' port ' . $this->port);
         }
         
         // Read a line from the socket.
         
-        $data = @fgets($this->con);
+        $data = fgets($this->con);
         
         // If the result is false, throw an exception.
         
         if ($data === false)
         {
             $this->disconnect();
-            throw new Exception('Cannot read a line from ' . $this->host . ' port ' . $this->port);
+            throw new SimpleSocketException('Cannot read a line from ' . $this->host . ' port ' . $this->port);
         }
         
         // Otherwise, trim and return the data.
@@ -246,7 +246,7 @@ class SimpleSocketClient
      * @return  bool       True on success.
      * @throws  Exception  If an error occurs while reading from the socket.
      */
-        
+    
     public function write($string, $autonewline = true)
     {
         // If not connected yet, connect now.
@@ -254,7 +254,7 @@ class SimpleSocketClient
         if ($this->con === null) $this->connect();
         if ($this->con === false)
         {
-            throw new Exception('Cannot connect to ' . $this->host . ' port ' . $this->port);
+            throw new SimpleSocketException('Cannot connect to ' . $this->host . ' port ' . $this->port);
         }
         
         // If $autonewline is true, add CRLF to the content.
@@ -267,14 +267,14 @@ class SimpleSocketClient
         {
             // Start writing.
             
-            $written = @fwrite($this->con, $string);
+            $written = fwrite($this->con, $string);
             
             // If the result is false, throw an exception.
             
             if ($written === false)
             {
                 $this->disconnect();
-                throw new Exception('Cannot write to ' . $this->host . ' port ' . $this->port);
+                throw new SimpleSocketException('Cannot write to ' . $this->host . ' port ' . $this->port);
             }
             
             // If nothing was written, return true to indicate success.
@@ -309,15 +309,15 @@ class SimpleSocketClient
     {
         // Empty?
         
-        if ($key === '') throw new Exception('Key is empty');
+        if ($key === '') throw new InvalidKeyException('Key is empty');
         
         // Check the length.
         
-        if (strlen($key) > 250) throw new Exception('Key is too long: ' . $key);
+        if (strlen($key) > 250) throw new InvalidKeyException('Key is too long: ' . $key);
         
         // Check for illegal characters.
         
-        if (preg_match('/[^\\x21-\\x7e]/', $key)) throw new Exception('Illegal character in key: ' . $key);
+        if (preg_match('/[^\\x21-\\x7e]/', $key)) throw new InvalidKeyException('Illegal character in key: ' . $key);
         
         // Return true to indicate pass.
         
@@ -362,3 +362,11 @@ class SimpleSocketClient
         @fclose($this->con);
     }
 }
+
+
+/**
+ * Exception class.
+ */
+
+class SimpleSocketException extends Exception { }
+class InvalidKeyException extends SimpleSocketException { }
