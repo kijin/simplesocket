@@ -11,6 +11,7 @@
  *   - Automatic serialization of non-scalar values.
  *   - Automatic compression of large values.
  *   - Incremental streaming of large result sets.
+ *   - Pipelining of multiple commands.
  * 
  * IMPORTANT: Redis 1.0 is no longer supported.
  * 
@@ -36,6 +37,14 @@
  * be converted to a RedisStream object which implements the Iterator interface.
  * You can access the result set by calling fetch() on this object until it
  * returns false, or you can use a foreach() loop on it.
+ * 
+ * Pipelining allows you to send multiple commands to the server without having
+ * to wait for the response. To open a pipeline, call openPipeline(). Subsequent
+ * method calls will return the number of outstanding responses, instead of the
+ * actual response. When you're ready to fetch responses, call fetchResponse()
+ * as many times as there are outstanding responses. Then call closePipeline()
+ * to return to the normal mode. If the pipeline is still clogged with unfetched
+ * responses, you should call closePipeline(true) to flush the pipeline.
  * 
  * This library does not support multiple servers, nor any distribution method.
  * If you want to distribute keys across several Redis instances, use a more
@@ -98,35 +107,43 @@ class RedisClient extends SimpleSocketClient
     }
     
     
-    // Begin pipeline mode.
+    // Open the pipeline.
     
-    public function beginPipeline()
+    public function openPipeline()
     {
-        if (!$this->pipeline_mode)
-        {
-            $this->pipeline_mode = true;
-            $this->pipeline_count = 0;
-        }
-        else
-        {
-            throw new RedisException('Pipeline mode already in effect.');
-        }
+        // Can't start two pipelines at the same time.
+        
+        if ($this->pipeline_mode) throw new RedisException('Pipeline mode already in effect.');
+
+        // Enable pipeline mode, and reset the counter.
+        
+        $this->pipeline_mode = true;
+        $this->pipeline_count = 0;
     }
     
     
-    // End pipeline mode.
+    // Close the pipeline.
     
-    public function endPipeline()
+    public function closePipeline($force_flush = false)
     {
-        if ($this->pipeline_count < 1)
+        // If the pipeline is still clogged, force flush or throw an exception.
+        
+        if ($this->pipeline_count > 0)
         {
-            $this->pipeline_mode = false;
-            $this->pipeline_count = -1;
+            if ($force_flush)
+            {
+                while ($this->pipeline_count > 0) $this->fetchResponse();
+            }
+            else
+            {
+                throw new RedisException('All responses must be read before the pipeline can be closed.');
+            }
         }
-        else
-        {
-            throw new RedisException('All responses must be read before the pipeline can be closed.');
-        }
+        
+        // Disable pipeline mode, and disable the counter.
+        
+        $this->pipeline_mode = false;
+        $this->pipeline_count = -1;
     }
     
     
@@ -134,6 +151,8 @@ class RedisClient extends SimpleSocketClient
     
     public function getLastStatus()
     {
+        // This is usually one of 'OK', 'PONG', 'QUEUED'.
+        
         return $this->last_status;
     }
     
@@ -196,7 +215,7 @@ class RedisClient extends SimpleSocketClient
         
         // Read the response.
         
-        $response = $this->readResponse();
+        $response = $this->fetchResponse();
         
         // If the response needs post-processing, do it here.
         
@@ -287,9 +306,9 @@ class RedisClient extends SimpleSocketClient
     }
     
     
-    // Read response method. This method can parse anything that Redis says.
+    // Fetch response method. This method can parse anything that Redis says.
     
-    public function readResponse()
+    public function fetchResponse()
     {
         // If the pipeline is empty, throw an exception. Otherwise, decrement the pipeline counter.
         
