@@ -53,7 +53,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.2.2
+ * Version: 0.2.3
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -87,7 +87,7 @@ class RedisClient extends SimpleSocketClient
     protected $compression = false;
     protected $streaming = false;
     protected $pipeline_mode = false;
-    protected $pipeline_count = -1;
+    protected $pipeline_history = false;
     protected $last_status = false;
     
     
@@ -115,10 +115,10 @@ class RedisClient extends SimpleSocketClient
         
         if ($this->pipeline_mode) throw new RedisException('Pipeline mode already in effect.');
 
-        // Enable pipeline mode, and reset the counter.
+        // Enable pipeline mode, and initialize the history.
         
         $this->pipeline_mode = true;
-        $this->pipeline_count = 0;
+        $this->pipeline_history = array();
     }
     
     
@@ -128,11 +128,11 @@ class RedisClient extends SimpleSocketClient
     {
         // If the pipeline is still clogged, force flush or throw an exception.
         
-        if ($this->pipeline_count > 0)
+        if (count($this->pipeline_history))
         {
             if ($force_flush)
             {
-                while ($this->pipeline_count > 0) $this->fetchResponse();
+                while (count($this->pipeline_history)) $this->fetchResponse();
             }
             else
             {
@@ -140,10 +140,10 @@ class RedisClient extends SimpleSocketClient
             }
         }
         
-        // Disable pipeline mode, and disable the counter.
+        // Disable pipeline mode, and disable the history.
         
         $this->pipeline_mode = false;
-        $this->pipeline_count = -1;
+        $this->pipeline_history = false;
     }
     
     
@@ -209,45 +209,18 @@ class RedisClient extends SimpleSocketClient
         
         $this->write($request, false);
         
-        // If in pipeline mode, increment and return the pipeline counter.
+        // If in pipeline mode, return the pipeline counter.
         
-        if ($this->pipeline_mode) return ++$this->pipeline_count;
-        
-        // Read the response.
-        
-        $response = $this->fetchResponse();
-        
-        // If the response needs post-processing, do it here.
-        
-        switch ($command)
+        if ($this->pipeline_mode)
         {
-            case 'EXISTS':
-            case 'HEXISTS':
-                return (bool)$response;
-                
-            case 'TYPE':
-                return ($this->last_status === 'none') ? false : $this->last_status;
-                
-            case 'KEYS':
-                return (is_scalar($response)) ? explode(' ', $response) : $response;
-                
-            case 'INFO':
-                return $this->postINFO($response);
-            
-            case 'MGET':
-            case 'HMGET':
-                if ($this->streaming)
-                {
-                    $response->setKeys($args);
-                }
-                else
-                {
-                    return $this->postMGET($args, $response);
-                }
-                
-            default:
-                return $response;
+            $history = array($command, in_array($command, array('MGET', 'HMGET')) ? $args : false);
+            $this->pipeline_history[] = $history;
+            return count($this->pipeline_history);
         }
+        
+        // Otherwise, just fetch and return the response.
+        
+        return $this->fetchResponse($command, in_array($command, array('MGET', 'HMGET')) ? $args : false);
     }
     
     
@@ -290,7 +263,7 @@ class RedisClient extends SimpleSocketClient
     }
     
     
-    // Post-Processing for MGET.
+    // Post-Processing for MGET/HMGET.
     
     protected function postMGET($keys, $values)
     {
@@ -308,20 +281,26 @@ class RedisClient extends SimpleSocketClient
     
     // Fetch response method. This method can parse anything that Redis says.
     
-    public function fetchResponse()
+    public function fetchResponse($command = false, $args = false)
     {
         // If the pipeline is empty, throw an exception. Otherwise, decrement the pipeline counter.
         
-        if (!$this->pipeline_count) throw new RedisException('No more responses in the pipeline.');
-        $this->pipeline_count--;
+        if ($this->pipeline_history !== false)
+        {
+            $history = array_shift($this->pipeline_history);
+            if (!$history) throw new RedisException('No more responses in the pipeline.');
+            $command = $history[0];
+            $args = $history[1];
+        }
         
         // Grab the first byte of the response to decide which type it is.
         
         $firstline = $this->readline();
         $type = $firstline[0];
         $message = substr($firstline, 1);
+        $response = null;
         
-        // Switch by response type.
+        // Parse the body of the response.
         
         switch ($type)
         {
@@ -331,24 +310,27 @@ class RedisClient extends SimpleSocketClient
                 
                 throw new RedisException($message);
             
-            // Status : 'OK' and 'PONG' are translated to true.
+            // Status : normal responses are translated to true.
             
             case '+':
                 
                 $this->last_status = $message;
-                return (in_array($message, array('OK', 'PONG', 'QUEUED'))) ? true : false;
+                $response = (in_array($message, array('OK', 'PONG', 'QUEUED'))) ? true : false;
+                break;
             
             // Integer : return the number.
             
             case ':':
                 
-                return (int)$message;
+                $response = (int)$message;
+                break;
             
             // Bulk : return the string, or null on failure.
             
             case '$':
                 
-                return ($message === '-1') ? null : $this->decode($this->read($message));
+                $response = ($message === '-1') ? null : $this->decode($this->read($message));
+                break;
             
             // Multi-bulk : empty results are filled with nulls.
             
@@ -360,29 +342,35 @@ class RedisClient extends SimpleSocketClient
                 
                 // If streaming is enabled, return a stream object.
                 
-                if ($this->streaming && $count) return new RedisStream($this, $count);
+                if ($this->streaming && $count)
+                {
+                    $response = new RedisStream($this, $count);
+                }
                 
                 // Otherwise, read the whole response into an array.
                 
-                $return = array();
-                for ($i = 0; $i < $count; $i++)
+                else
                 {
-                    $header = $this->readline();
-                    if ($header[0] !== '$')
+                    $response = array();
+                    for ($i = 0; $i < $count; $i++)
                     {
-                        throw new RedisException('Unexpected response from Redis: ' . $header);
-                    }
-                    elseif ($header === '$-1')
-                    {
-                        $return[] = null;
-                    }
-                    else
-                    {
-                        $return[] = $this->decode($this->read(substr($header, 1)));
+                        $header = $this->readline();
+                        if ($header[0] !== '$')
+                        {
+                            throw new RedisException('Unexpected response from Redis: ' . $header);
+                        }
+                        elseif ($header === '$-1')
+                        {
+                            $response[] = null;
+                        }
+                        else
+                        {
+                            $response[] = $this->decode($this->read(substr($header, 1)));
+                        }
                     }
                 }
                 
-                return $return;
+                break;
                 
             // Unknown response type.
             
@@ -390,6 +378,37 @@ class RedisClient extends SimpleSocketClient
                 
                 throw new RedisException('Unexpected response from Redis: ' . $response);
         }
+        
+        // If the response needs post-processing, do it here.
+        
+        switch ($command)
+        {
+            case 'EXISTS':
+            case 'HEXISTS':
+                return (bool)$response;
+                
+            case 'TYPE':
+                return ($this->last_status === 'none') ? false : $this->last_status;
+                
+            case 'KEYS':
+                return (is_scalar($response)) ? explode(' ', $response) : $response;
+                
+            case 'INFO':
+                return $this->postINFO($response);
+            
+            case 'MGET':
+            case 'HMGET':
+                if ($this->streaming)
+                {
+                    $response->setKeys($args);
+                }
+                else
+                {
+                    return $this->postMGET($args, $response);
+                }
+        }
+        
+        return $response;
     }
     
     
