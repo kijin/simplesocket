@@ -303,7 +303,7 @@ class RedisClient extends SimpleSocketClient
                 
                 // If streaming is enabled, return a stream object.
                 
-                if ($this->streaming && $count) return new RedisStream($this, $this->con, $count);
+                if ($this->streaming && $count) return new RedisStream($this, $count);
                 
                 // Otherwise, read the whole response into an array.
                 
@@ -439,7 +439,7 @@ class RedisClient extends SimpleSocketClient
  * would be clogging the pipe.
  */
 
-class RedisStream extends SimpleSocketClient implements Iterator
+class RedisStream implements Iterator
 {
     // Protected properties.
 
@@ -453,12 +453,11 @@ class RedisStream extends SimpleSocketClient implements Iterator
     
     // Constructor override.
     
-    public function __construct($caller, $con, $count)
+    public function __construct($caller, $count)
     {
         // Store in instance, overriding $con in particular.
         
         $this->caller = $caller;
-        $this->con = $con;
         $this->count = $count;
     }
     
@@ -545,13 +544,13 @@ class RedisStream extends SimpleSocketClient implements Iterator
         
         if ($this->closed) return false;
         
-        // Otherwise, fetch the next bulk.
+        // Read the next bulk item from the pipe.
         
-        $bulk_header = $this->readline();
+        $bulk_header = $this->caller->readline();
         $bulk_length = (int)substr($bulk_header, 1);
-        $bulk_body = ($bulk_length < 0) ? null : $this->caller->decode($this->read($bulk_length));
+        $bulk_body = ($bulk_length < 0) ? null : $this->caller->decode($this->caller->read($bulk_length));
         
-        // Increment the counter.
+        // Increment the counter. If this is the last item, mark the stream as closed.
         
         $this->current++;
         if ($this->current >= $this->count) $this->closed = true;
@@ -568,7 +567,7 @@ class RedisStream extends SimpleSocketClient implements Iterator
     {
         // Loop until the end of the stream.
         
-        while ($this->fetch() !== false) { }
+        if (!$this->closed) while ($this->fetch() !== false) { }
     }
     
     
