@@ -4,52 +4,47 @@
  * Redis Client Library for PHP 5.2+
  * 
  * Based on Simple Socket Client, this library implements the text protocol
- * used by the Redis server. Command specifications are based on Redis 1.2,
- * but earlier versions of Redis are also fully supported.
+ * used by the Redis key-value store. It uses the multi-bulk command format,
+ * which means you need Redis 1.2 or higher. Redis 2.0 is recommended.
  * 
- * Supported Features:
- *   - Automatic detection of Redis version.
+ * Features:
  *   - Automatic serialization of non-scalar values.
- *   - Automatic compression of large values (disabled by default).
- *   - Streaming of large result sets for significant memory savings.
- *   - Multi-bulk commands (only available with Redis 1.1+).
- *   - Support for possible new commands using the multi-bulk format.
+ *   - Automatic compression of large values.
+ *   - Incremental streaming of large result sets.
  * 
- * Unsupported Features:
- *   - Monitor command.
- *   - Key distribution and load balancing.
- * 
- * Auto-detection of Redis version is done through an INFO command. This library
- * will send an INFO command the first time a post-1.0 command is attempted.
- * If you do not want this, you can force this library to assume a particular
- * Redis version, by calling set_redis_version(1.2) or similar.
+ * IMPORTANT: Redis 1.0 is no longer supported.
  * 
  * If you attempt to use a command that is not supported by your version of
- * Redis, you will get an Exception. The same is true for most server error
- * conditions; it is your responsibility to catch those exceptions and take
- * appropriate actions.
+ * Redis, you will get a RedisException. The same will happen if the server
+ * returns any other error, e.g. incorrect number of arguments.
  * 
- * For compatibility with other client libraries, compression is disabled by
- * default. If you want to enable compression, call set_compression($threshold).
- * Any value with a size greater than the threshold will be gzipped on the fly.
- * If called without an argument, set_compression will assume a 1KB threshold.
+ * If you attempt to store an array or object where only strings are allowed,
+ * the array or object will be automatically serialized. When the value is
+ * later fetched, it will be automatically unserialized. But this process adds
+ * idiosyncratic headers to the value, which might not be compatible with other
+ * client libraries. If interoperation is important for you, manually serialize
+ * all your values using something like json_encode().
  * 
- * Several commands, such as keys() and mget(), are also available with a 
- * streaming version, such as keys_stream() and mget_stream(). These methods
- * will return a RedisStream object, on which you can call fetch() to get each
- * value in the result set. Note that you must fetch all values before sending
- * another command through the same socket, or else call RedisStream::close()
- * to disconnect and reconnect. Otherwise, subsequence commands may exhibit
- * unexpected behavior because unfetched data would be clogging the pipe.
+ * Compression can help you save RAM and disk space when storing large amounts
+ * of text. But this also breaks compatibility with other client libraries, so
+ * compression is disabled by deault. Call enableCompression() to enable it.
+ * If called without an argument, a compression threshold of 1KB will apply.
+ * 
+ * Incremental streaming helps save RAM when working with large result sets.
+ * It is disabled by default; to enable, call enableStreaming(). All methods
+ * will behave in exactly the same way, except that multi-bulk responses will
+ * be converted to a RedisStream object which implements the Iterator interface.
+ * You can access the result set by calling fetch() on this object until it
+ * returns false, or you can use a foreach() loop on it.
  * 
  * This library does not support multiple servers, nor any distribution method.
  * If you want to distribute keys across several Redis instances, use a more
  * fully featured client library (there are quite a few out there, you know);
- * or use this library in combination with your own key distribution algorithm.
+ * or use this in combination with a thid-party key distribution library.
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.7
+ * Version: 0.2.1
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -78,1356 +73,213 @@ require_once(dirname(__FILE__) . '/../simplesocketclient.php');
 
 class RedisClient extends SimpleSocketClient
 {
-    // Configuration.
+    // Configuration and state data.
     
-    private $compression = false;
-    private $redis_version = false;
+    protected $compression = false;
+    protected $streaming = false;
+    protected $last_status = false;
     
     
-    // Set compression threshold. Default: 1KB.
+    // Enable compression and set the lower threshold. Default: 1KB.
     
-    public function set_compression($threshold = 1024)
+    public function enableCompression($threshold = 1024)
     {
-        // Save to instance, or false if an invalid value has been given.
+        // Save to config.
         
-        $this->compression = (int)$threshold ? (int)$threshold : false;
+        $this->compression = (int)$threshold;
     }
     
     
-    // Set Redis version. This method will disable automatic checking.
+    // Enable streaming.
     
-    public function set_redis_version($version)
+    public function enableStreaming()
     {
-        // Save to instance.
+        // Save to config.
         
-        $this->redis_version = (float)$version;
+        $this->streaming = true;
     }
     
     
-    // Get Redis version. This method will automatically check the server.
+    // Get the last status message.
     
-    public function get_redis_version()
+    public function getLastStatus()
     {
-        // Use an INFO command to obtain the version.
+        // This is usually 'OK'.
         
-        if ($this->redis_version === false) 
+        return $this->last_status;
+    }
+    
+    
+    // All commands are caught by this magic method.
+    
+    public function __call($command, $args)
+    {
+        // Make the command uppercase.
+        
+        $command = strtoupper($command);
+        
+        // If the request needs pre-processing, do it here.
+        
+        switch ($command)
         {
-            $this->write('INFO');
-            $info = $this->get_response();
-            $this->redis_version = (float)substr($info, 14, 3);
+            case 'MSET':
+            case 'MSETNX':
+                $args = $this->preMSET($args[0]);
+                break;
+                
+            case 'HMSET':
+            case 'HMSETNX':
+                $args = $this->preMSET($args[1], $args[0]);
+                break;
+            
+            default: switch (count($args))
+            {
+                case 0: break;
+                
+                case 1:
+                    if (is_array($args[0])) $args = $args[0];
+                    break;
+                    
+                default:
+                    if (is_array($args[0]) || is_array($args[1])) $args = $this->flatten($args);
+            }
         }
         
-        // Return the cached value.
+        // Start writing the multi-bulk request.
         
-        return $this->redis_version;
-    }
-    
-    
-    // AUTH method.
-    
-    public function auth($password)
-    {
-        // Expect: status.
+        $request = '*' . (1 + count($args)) . "\r\n";
+        $request .= '$' . strlen($command) . "\r\n" . $command . "\r\n";
         
-        $this->validate_key($password);
-        $this->write('AUTH ' . $password);
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // SELECT method.
-    
-    public function select($db)
-    {
-        // Expect: status.
+        // Append all the arguments, serializing/compressing them if necessary.
         
-        $this->validate_key($db);
-        $this->write('SELECT ' . $db);
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // DBSIZE method.
-    
-    public function dbsize()
-    {
-        // Expect: integer.
-        
-        $this->write('DBSIZE');
-        return $this->get_response();
-    }
-    
-    
-    // EXISTS method.
-    
-    public function exists($key)
-    {
-        // Expect: integer (cast to bool).
-        
-        $this->validate_key($key);
-        $this->write('EXISTS ' . $key);
-        return (bool)$this->get_response();
-    }
-    
-    
-    // TYPE method.
-    
-    public function type($key)
-    {
-        // Expect: single line.
-        
-        $this->validate_key($key);
-        $this->write('TYPE ' . $key);
-        return strtolower($this->get_response());
-    }
-    
-    
-    // KEYS method.
-    
-    public function keys($pattern = '*')
-    {
-        // Expect: bulk (convert to array).
-        
-        $this->validate_key($pattern);
-        $this->write('KEYS ' . $pattern);
-        return explode(' ', (string)$this->get_response());
-    }
-    
-    
-    // KEYS method (streaming version).
-    
-    public function keys_stream($pattern = '*')
-    {
-        // Expect: bulk.
-        
-        $this->validate_key($pattern);
-        $this->write('KEYS ' . $pattern);
-        return new RedisStream($this, $this->con, 'keys');
-    }
-    
-    
-    // RANDOMKEY method.
-    
-    public function randomkey()
-    {
-        // Expect: single line.
-        
-        $this->write('RANDOMKEY');
-        return (string)$this->get_response();
-    }
-    
-    
-    // GET method.
-    
-    public function get($key)
-    {
-        // If the key is an array, pass on to mget().
-        
-        if (is_array($key)) return $this->mget($key);
-        
-        // Expect: bulk.
-        
-        $this->validate_key($key);
-        $this->write('GET ' . $key);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // MGET method.
-    
-    public function mget($keys)
-    {
-        // Validate the keys.
-        
-        foreach ($keys as $key) $this->validate_key($key);
-        
-        // If no keys are supplied, return an empty array.
-        
-        $count = count($keys);
-        if (!$count) return array();
-        
-        // Expect: multi-bulk.
-        
-        $this->write('MGET ' . implode(' ', $keys));
-        $response = $this->get_response();
-        if (!is_array($response) || count($response) !== $count) return false;
-        
-        // Convert to an associative array.
-        
-        $return = array();
-        $count = count($response);
-        for ($i = 0; $i < $count; $i ++)
+        foreach ($args as $argument)
         {
-            $return[$keys[$i]] = $this->decode($response[$i]);
+            $argument = $this->encode($argument);
+            $request .= '$' . strlen($argument) . "\r\n" . $argument . "\r\n";
+        }
+        
+        // Send the request to the server.
+        
+        $this->write($request, false);
+        
+        // Read the response.
+        
+        $response = $this->readResponse();
+        
+        // If the response needs post-processing, do it here.
+        
+        switch ($command)
+        {
+            case 'EXISTS':
+                return (bool)$response;
+                
+            case 'TYPE':
+                return ($this->last_status === 'none') ? false : $this->last_status;
+                
+            case 'KEYS':
+                return (is_scalar($response)) ? explode(' ', $response) : $response;
+                
+            case 'INFO':
+                return $this->postINFO($response);
+            
+            case 'MGET':
+            case 'HMGET':
+                if ($this->streaming)
+                {
+                    $response->setKeys($args);
+                }
+                else
+                {
+                    return $this->postMGET($args, $response);
+                }
+                
+            default:
+                return $response;
+        }
+    }
+    
+    
+    // Pre-Processing for MSET/HMSET.
+    
+    protected function preMSET($args, $key = false)
+    {
+        // Make sure we have an array of arguments.
+        
+        if (!is_array($args)) throw new RedisException('MSET/HMSET requires an array of arguments.');
+        
+        // Flatten the keys and values together.
+        
+        $return = ($key === false) ? array() : array($key);
+        foreach ($args as $key => $value)
+        {
+            $return[] = $key;
+            $return[] = $value;
+            echo "$key $value \n";
         }
         return $return;
     }
     
     
-    // MGET method (streaming version).
+    // Post-Processing for INFO.
     
-    public function mget_stream($keys)
+    protected function postINFO($response)
     {
-        // Validate the keys.
+        // Construct an associative array.
         
-        foreach ($keys as $key) $this->validate_key($key);
-        
-        // If no keys are supplied, return an empty array.
-        
-        $count = count($keys);
-        if (!$count) return array();
-        
-        // Expect: multi-bulk.
-        
-        $this->write('MGET ' . implode(' ', $keys));
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // GETSET method.
-    
-    public function getset($key, $value)
-    {
-        // Validate the key.
-        
-        $this->validate_key($key);
-        
-        // Attempt a multi-bulk command. (Expect: bulk)
-        
-        $this->multi_bulk_command(array('GETSET', $key, $this->encode($value)), 2);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // MOVE method.
-    
-    public function move($key, $target_db)
-    {
-        // Expect: integer (cast to bool).
-        
-        $this->validate_key($key);
-        $this->validate_key($target_db);
-        $this->write('MOVE ' . $key . ' ' . $target_db);
-        return (bool)$this->get_response();
-    }
-    
-    
-    // RENAME method.
-    
-    public function rename($oldkey, $newkey, $overwrite = true)
-    {
-        // Validate the keys.
-        
-        $this->validate_key($oldkey);
-        $this->validate_key($newkey);
-        
-        // Write either RENAME or RENAMENX.
-        
-        $command = $overwrite ? 'RENAME' : 'RENAMENX';
-        $command = $this->build_command($command, $oldkey, $newkey);
-        $this->write($command);
-        
-        // Expect: status or integer.
-        
-        $response = $this->get_response();
-        return ($response === true || $response === 1) ? true : false;
-    }
-    
-    
-    // RENAMENX method.
-    
-    public function renamenx($oldkey, $newkey)
-    {
-        // Call rename() with $overwrite = false.
-        
-        return $this->rename($oldkey, $newkey, false);        
-    }
-    
-    
-    // SET method.
-    
-    public function set($key, $value, $overwrite = true)
-    {
-        // Validate the key.
-        
-        $this->validate_key($key);
-        
-        // Serialize and/or compress the value.
-        
-        $value = $this->encode($value);
-        
-        // Write either SET or SETNX.
-        
-        $command = $overwrite ? 'SET' : 'SETNX';
-        $command = $this->build_command($command, $key, strlen($value));
-        $this->write($command . "\r\n" . $value . "\r\n", false);
-        
-        // Expect: status or integer.
-        
-        $response = $this->get_response();
-        return ($response === true || $response === 1) ? true : false;
-    }
-    
-    
-    // SETNX method.
-    
-    public function setnx($key, $value)
-    {
-        // Call set() with $overwrite = false.
-        
-        return $this->set($key, $value, false);
-    }
-    
-    
-    // MSET method. (Redis 1.1+)
-    
-    public function mset($pairs, $overwrite = true)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Validate the keys.
-        
-        $keys = array_keys($pairs);
-        foreach ($keys as $key) $this->validate_key($key);
-        
-        // Assemble the arguments for an MSET[NX] command.
-        
-        $args = array($overwrite ? 'MSET' : 'MSETNX');
-        foreach ($pairs as $key => $value)
-        {
-            $args[] = (string)$key;
-            $args[] = $this->encode($value);
-        }
-        
-        // Attempt a multi-bulk command. (Expect: integer; cast to bool)
-        
-        $mbc = $this->multi_bulk_command($args);
-        if ($mbc) return (bool)$this->get_response();
-        
-        // If MBC is not available, return false.
-        
-        return false;
-    }
-    
-    
-    // MSETNX method. (Redis 1.1+)
-    
-    public function msetnx($pairs)
-    {
-        // Call mset() with $overwrite = false.
-        
-        return $this->mset($pairs, false);
-    }    
-    
-    
-    // EXPIRE method.
-    
-    public function expire($key, $expiry)
-    {
-        // If $expiry >= 30 days, treat it as a timestamp.
-        
-        $timestamp = ($expiry >= 2592000) ? true : false;
-        
-        // Expect: status.
-        
-        $this->validate_key($key);
-        $command = $timestamp ? 'EXPIREAT' : 'EXPIRE';
-        $this->write($command . ' ' . $key . ' ' . $expiry);
-        return $this->get_response();
-    }
-    
-    
-    // TTL method.
-    
-    public function ttl($key)
-    {
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->write('TTL ' . $key);
-        return $this->get_response();
-    }
-    
-    
-    // DEL method.
-    
-    public function del($key)
-    {
-        // Validate the key, or array of keys.
-        
-        if (is_array($key))
-        {
-            foreach ($key as $k) $this->validate_key($k);
-            $key = implode(' ', $key);
-        }
-        else
-        {
-            $this->validate_key($key);            
-        }     
-        
-        // Expect: integer.
-        
-        $this->write('DEL ' . $key);
-        return $this->get_response();
-    }
-    
-    
-    // DELETE method, an alias to del().
-    
-    public function delete($key)
-    {
-        // Call the real method.
-        
-        return $this->del($key);
-    }
-    
-    
-    // INCR method.
-    
-    public function incr($key, $diff = 1)
-    {
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->write('INCRBY ' . $key . ' ' . (int)$diff);
-        return $this->get_response();
-    }
-    
-    
-    // DECR method.
-    
-    public function decr($key, $diff = 1)
-    {
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->write('DECRBY ' . $key . ' ' . (int)$diff);
-        return $this->get_response();
-    }
-    
-    
-    // LPUSH method.
-    
-    public function lpush($key, $value)
-    {
-        // Expect: status.
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('LPUSH', $key, $this->encode($value)), 2);
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // RPUSH method.
-    
-    public function rpush($key, $value)
-    {
-        // Expect: status.
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('RPUSH', $key, $this->encode($value)), 2);
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // LLEN method.
-    
-    public function llen($key)
-    {
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->write('LLEN ' . $key);
-        return $this->get_response();
-    }
-    
-    
-    // LRANGE method.
-    
-    public function lrange($key, $start, $end)
-    {
-        // Expect: multi-bulk.
-        
-        $this->validate_key($key);
-        $command = $this->build_command('LRANGE', $key, (int)$start, (int)$end);
-        $this->write($command);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // LRANGE method (streaming version).
-    
-    public function lrange_stream($key, $start, $end)
-    {
-        // Expect: multi-bulk.
-        
-        $this->validate_key($key);
-        $command = $this->build_command('LRANGE', $key, (int)$start, (int)$end);
-        $this->write($command);
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // LTRIM method.
-    
-    public function ltrim($key, $start, $end)
-    {
-        // Expect: status.
-        
-        $this->validate_key($key);
-        $command = $this->build_command('LTRIM', $key, (int)$start, (int)$end);
-        $this->write($command);
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // LINDEX method.
-    
-    public function lindex($key, $index)
-    {
-        // Expect: bulk.
-        
-        $this->validate_key($key);
-        $command = $this->build_command('LINDEX', $key, (int)$index);
-        $this->write($command);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // LSET method.
-    
-    public function lset($key, $index, $value)
-    {
-        // Expect: status.
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('LSET', $key, $index, $this->encode($value)), 3);
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // LREM method.
-    
-    public function lrem($key, $count, $value)
-    {
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('LREM', $key, $count, $this->encode($value)), 3);
-        return $this->get_response();
-    }
-    
-    
-    // LPOP method.
-    
-    public function lpop($key)
-    {
-        // Expect: bulk.
-        
-        $this->validate_key($key);
-        $this->write('LPOP ' . $key);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // RPOP method.
-    
-    public function rpop($key)
-    {
-        // Expect: bulk.
-        
-        $this->validate_key($key);
-        $this->write('RPOP ' . $key);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // BLPOP method. (Redis 1.3+)
-    
-    public function blpop($keys, $timeout)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.3)
-        {
-            throw new Exception('MSET is only supported in Redis 1.3+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Take care of arrays.
-        
-        if (is_array($keys))
-        {
-            foreach ($keys as $key) $this->validate_key($key);
-            array_unshift($keys, 'BLPOP');
-            $keys[] = (int)$timeout;
-        }
-        else
-        {
-            $this->validate_key($keys);    
-            $keys = array('BLPOP', $keys, (int)$timeout);
-        }
-        
-        // Expect: multi-bulk.
-        
-        $this->multi_bulk_command($keys);        
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // BRPOP method. (Redis 1.3+)
-    
-    public function brpop($keys, $timeout)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.3)
-        {
-            throw new Exception('MSET is only supported in Redis 1.3+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Take care of arrays.
-        
-        if (is_array($keys))
-        {
-            foreach ($keys as $key) $this->validate_key($key);
-            array_unshift($keys, 'BRPOP');
-            $keys[] = (int)$timeout;
-        }
-        else
-        {
-            $this->validate_key($keys);    
-            $keys = array('BRPOP', $keys, (int)$timeout);
-        }
-        
-        // Expect: multi-bulk.
-        
-        $this->multi_bulk_command($keys);        
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // RPOPLPUSH method. (Redis 1.1+)
-    
-    public function rpoplpush($source_key, $destination_key)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Expect: bulk.
-        
-        $this->validate_key($source_key);
-        $this->validate_key($destination_key);
-        $mbc = $this->multi_bulk_command(array('RPOPLPUSH', $source_key, $destination_key));
-        return $mbc ? $this->decode($this->get_response()) : false;
-    }
-    
-    
-    // SADD method.
-    
-    public function sadd($key, $member)
-    {
-        // Expect: integer (cast to bool).
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('SADD', $key, $this->encode($member)), 2);
-        return (bool)$this->get_response();
-    }
-    
-    
-    // SREM method.
-    
-    public function srem($key, $member)
-    {
-        // Expect: integer (cast to bool).
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('SREM', $key, $this->encode($member)), 2);
-        return (bool)$this->get_response();
-    }
-    
-    
-    // SPOP method.
-    
-    public function spop($key)
-    {
-        // Expect: bulk.
-        
-        $this->validate_key($key);
-        $this->write('SPOP ' . $key);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // SMOVE method.
-    
-    public function smove($source_key, $destination_key, $member)
-    {
-        // Expect: integer (cast to bool).
-        
-        $this->validate_key($source_key);
-        $this->validate_key($destination_key);
-        $this->multi_bulk_command(array('SMOVE', $source_key, $destination_key, $this->encode($member)), 3);
-        return (bool)$this->get_response();
-    }
-    
-    
-    // SCARD method.
-    
-    public function scard($key)
-    {
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->write('SCARD ' . $key);
-        return $this->get_response();
-    }
-    
-    
-    // SISMEMBER method.
-    
-    public function sismember($key, $member)
-    {
-        // Expect: integer (cast to bool).
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('SISMEMBER', $key, $this->encode($member)), 2);
-        return (bool)$this->get_response();
-    }
-    
-    
-    // SINTER method.
-    
-    public function sinter( /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $args = func_get_args();
-        $keys = $this->array_flatten($args);
-        
-        // Expect: multi-bulk.
-        
-        $this->write('SINTER ' . implode(' ', $keys));
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // SINTER method (streaming version).
-    
-    public function sinter_stream( /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $args = func_get_args();
-        $keys = $this->array_flatten($args);
-        
-        // Expect: multi-bulk.
-        
-        $this->write('SINTER ' . implode(' ', $keys));
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // SINTERSTORE method.
-    
-    public function sinterstore($destination /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $this->validate_key($destination);
-        $args = func_get_args(); array_shift($args);
-        $keys = $this->array_flatten($args);
-        
-        // Expect: status.
-        
-        $this->write('SINTERSTORE ' . $destination . ' ' . implode(' ', $keys));
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // SUNION method.
-    
-    public function sunion( /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $args = func_get_args();
-        $keys = $this->array_flatten($args);
-        
-        // Expect: multi-bulk.
-        
-        $this->write('SUNION ' . implode(' ', $keys));
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // SUNION method (streaming version).
-    
-    public function sunion_stream( /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $args = func_get_args();
-        $keys = $this->array_flatten($args);
-        
-        // Expect: multi-bulk.
-        
-        $this->write('SUNION ' . implode(' ', $keys));
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // SUNIONSTORE method.
-    
-    public function sunionstore($destination /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $this->validate_key($destination);
-        $args = func_get_args(); array_shift($args);
-        $keys = $this->array_flatten($args);
-        
-        // Expect: status.
-        
-        $this->write('SUNIONSTORE ' . $destination . ' ' . implode(' ', $keys));
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // SDIFF method.
-    
-    public function sdiff( /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $args = func_get_args();
-        $keys = $this->array_flatten($args);
-        
-        // Expect: multi-bulk.
-        
-        $this->write('SDIFF ' . implode(' ', $keys));
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // SDIFF method (streaming version).
-    
-    public function sdiff_stream( /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $args = func_get_args();
-        $keys = $this->array_flatten($args);
-        
-        // Expect: multi-bulk.
-        
-        $this->write('SDIFF ' . implode(' ', $keys));
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // SDIFFSTORE method.
-    
-    public function sdiffstore($destination /* keys */ )
-    {
-        // Flatten the arguments.
-        
-        $this->validate_key($destination);
-        $args = func_get_args(); array_shift($args);
-        $keys = $this->array_flatten($args);
-        
-        // Expect: status.
-        
-        $this->write('SDIFFSTORE ' . $destination . ' ' . implode(' ', $keys));
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // SMEMBERS method.
-    
-    public function smembers($key)
-    {
-        // Expect: multi-bulk.
-        
-        $this->validate_key($key);
-        $this->write('SMEMBERS ' . $key);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // SMEMBERS method (streaming version).
-    
-    public function smembers_stream($key)
-    {
-        // Expect: multi-bulk.
-        
-        $this->validate_key($key);
-        $this->write('SMEMBERS ' . $key);
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // SRANDMEMBER method.
-    
-    public function srandmember($key)
-    {
-        // Expect: bulk.
-        
-        $this->validate_key($key);
-        $this->write('SRANDMEMBER ' . $key);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // ZADD method. (Redis 1.1+)
-    
-    public function zadd($key, $score, $member)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Expect: integer (cast to bool).
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('ZADD', $key, $score, $this->encode($member)));
-        return (bool)$this->get_response();
-    }
-    
-    
-    // ZREM method. (Redis 1.1+)
-    
-    public function zrem($key, $score, $member)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Expect: integer (cast to bool).
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('ZREM', $key, $score, $this->encode($member)));
-        return (bool)$this->get_response();
-    }
-    
-    
-    // ZINCRBY method. (Redis 1.1+)
-    
-    public function zincrby($key, $increment, $member)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('ZINCRBY', $key, $increment, $this->encode($member)));
-        return $this->get_response();
-    }
-    
-    
-    // ZRANGE method. (Redis 1.1+)
-    
-    public function zrange($key, $start, $end, $with_scores = false, $reverse = false)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Write the command. (Expect: multi-bulk)
-        
-        $this->validate_key($key);
-        $command = $reverse ? 'ZREVRANGE' : 'ZRANGE';
-        $command = $with_scores ? array($command, $key, $start, $end, 'WITHSCORES'): array($command, $key, $start, $end);
-        $this->multi_bulk_command($command);
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // ZRANGE method : streaming version. (Redis 1.1+)
-    
-    public function zrange_stream($key, $start, $end, $with_scores = false, $reverse = false)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Write the command. (Expect: multi-bulk)
-        
-        $this->validate_key($key);
-        $command = $reverse ? 'ZREVRANGE' : 'ZRANGE';
-        $command = $with_scores ? array($command, $key, $start, $end, 'WITHSCORES'): array($command, $key, $start, $end);
-        $this->multi_bulk_command($command);
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // ZREVRANGE method. (Redis 1.1+)
-    
-    public function zrevrange($key, $start, $end, $with_scores)
-    {
-        // Call zrange() with $reverse = true.
-        
-        return $this->zrange($key, $start, $end, $with_scores, true);
-    }
-    
-    
-    // ZREVRANGE method : streaming version. (Redis 1.1+)
-    
-    public function zrevrange_stream($key, $start, $end, $with_scores = false)
-    {
-        // Call zrange() with $reverse = true.
-        
-        return $this->zrange_stream($key, $start, $end, $with_scores, true);
-    }
-    
-    
-    // ZRANGEBYSCORE method. (Redis 1.1+)
-    
-    public function zrangebyscore($key, $min, $max, $offset = false, $count = false)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Write the command.
-        
-        $this->validate_key($key);
-        if ((int)$offset && (int)$count)
-        {
-            $command = array('ZRANGEBYSCORE', $key, $min, $max, 'LIMIT', (int)$offset, (int)$count);
-        }
-        else
-        {
-            $command = array('ZRANGEBYSCORE', $key, $min, $max);
-        }
-        $this->multi_bulk_command($command);
-        
-        // Expect: multi-bulk.
-        
-        return $this->decode($this->get_response());
-    }
-    
-    
-    // ZRANGEBYSCORE method : streaming version. (Redis 1.1+)
-    
-    public function zrangebyscore_stream($key, $min, $max, $offset = false, $count = false)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Write the command.
-        
-        $this->validate_key($key);
-        if ((int)$offset && (int)$count)
-        {
-            $command = array('ZRANGEBYSCORE', $key, $min, $max, 'LIMIT', (int)$offset, (int)$count);
-        }
-        else
-        {
-            $command = array('ZRANGEBYSCORE', $key, $min, $max);
-        }
-        $this->multi_bulk_command($command);
-        
-        // Expect: multi-bulk.
-        
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // ZREMRANGEBYSCORE method. (Redis 1.1+)
-    
-    public function zremrangebyscore($key, $min, $max)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('ZREMRANGEBYSCORE', $key, $min, $max));
-        return $this->get_response();
-    }
-    
-    
-    // ZCARD method. (Redis 1.1+)
-    
-    public function zcard($key)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Expect: integer.
-        
-        $this->validate_key($key);
-        $this->write('ZCARD ' . $key);
-        return $this->get_response();
-    }
-    
-    
-    // ZSCORE method. (Redis 1.1+)
-    
-    public function zscore($key, $member)
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
-        }
-        
-        // Expect: bulk.
-        
-        $this->validate_key($key);
-        $this->multi_bulk_command(array('ZSCORE', $key, $this->encode($member)));
-        return $this->get_response();
-    }
-    
-    
-    // SORT method.
-    
-    public function sort($key, $conditions = '')
-    {
-        // Validate the key and the conditions.
-        
-        $this->validate_key($key);
-        if (preg_match('[^\x21-\xfe]', $conditions)) throw new Exception('Illegal character in conditions: ' . $conditions);
-        
-        // Expect: multi-bulk.
-        
-        $this->write('SORT ' . $key . ' ' . $conditions . "\r\n", false);
-        return $this->get_response();
-    }
-    
-    
-    // SORT method (streaming version).
-    
-    public function sort_stream($key, $conditions = '')
-    {
-        // Validate the key and the conditions.
-        
-        $this->validate_key($key);
-        if (preg_match('[^\x21-\xfe]', $conditions)) throw new Exception('Illegal character in conditions: ' . $conditions);
-        
-        // Expect: multi-bulk.
-        
-        $this->write('SORT ' . $key . ' ' . $conditions . "\r\n", false);
-        return new RedisStream($this, $this->con, 'multi-bulk');
-    }
-    
-    
-    // INFO method.
-    
-    public function info()
-    {
-        // Expect: bulk.
-        
-        $this->write('INFO');
-        $info = $this->get_response();
-        
-        // Parse into an associative array.
-        
-        $info = explode("\n", $info);
+        $response = explode("\n", $response);
         $return = array();
-        
-        foreach ($info as $line)
+        foreach ($response as $line)
         {
             if (!$line) continue;
             $line = explode(':', $line, 2);
             $return[$line[0]] = trim($line[1]);
         }
-        
         return $return;
     }
     
     
-    // SAVE method.
+    // Post-Processing for MGET.
     
-    public function save()
+    protected function postMGET($keys, $values)
     {
-        // Expect: status.
+        // Construct an associative array.
         
-        $this->write('SAVE');
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // BGSAVE method.
-    
-    public function bgsave()
-    {
-        // Expect: status.
-        
-        $this->write('BGSAVE');
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // BGREWRITEAOF method. (Redis 1.1+)
-    
-    public function bgrewriteaof()
-    {
-        // Check Redis version.
-        
-        if ($this->get_redis_version() < 1.1)
+        $return = array();
+        $count = count($keys);
+        for ($i = 0; $i < $count; $i++)
         {
-            throw new Exception('MSET is only supported in Redis 1.1+. You are using Redis ' . $this->get_redis_version());
+            $return[$keys[$i]] = $values[$i];
         }
-        
-        // Expect: status.
-        
-        $this->write('BGREWRITEAOF');
-        return ($this->get_response() === true) ? true : false;
+        return $return;
     }
     
     
-    // LASTSAVE method.
+    // Read response method. This method can parse anything that Redis says.
     
-    public function lastsave($human_readable = false)
+    protected function readResponse()
     {
-        // Expect: integer.
+        // Grab the first byte of the response to decide which type it is.
         
-        $this->write('LASTSAVE');
-        $timestamp = $this->get_response();
-        return $human_readable ? date('Y-m-d H:i:s', $timestamp) : $timestamp;
-    }
-    
-    
-    // FLUSHDB method.
-    
-    public function flushdb()
-    {
-        // Expect: status.
-        
-        $this->write('FLUSHDB');
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // FLUSHALL method.
-    
-    public function flushall()
-    {
-        // Expect: status.
-        
-        $this->write('FLUSHALL');
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // SHUTDOWN method.
-    
-    public function shutdown()
-    {
-        // Expect: status.
-        
-        $this->write('SHUTDOWN');
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // SLAVEOF method.
-    
-    public function slaveof($host = false, $port = 6379)
-    {
-        // If the host is not given, we're a master.
-        
-        $target = ($host !== false) ? ($host . ' ' . $port) : 'NO ONE';
-        
-        // Expect: status.
-        
-        $this->write('SLAVEOF ' . $target);
-        return ($this->get_response() === true) ? true : false;
-    }
-    
-    
-    // MONITOR method.
-    
-    public function monitor()
-    {
-        // Not implemented.
-        
-        return false;
-    }
-    
-    
-    // Catch-all method for unknown commands.
-    
-    public function __call($name, $arguments)
-    {
-        // Assume multi-bulk command.
-        
-        array_unshift($arguments, strtoupper($name));
-        $this->multi_bulk_command($arguments);
-        return $this->get_response();
-    }
-    
-    
-    // Get response method. This method can parse anything that Redis says.
-    
-    private function get_response()
-    {
-        // Get the first byte of the response.
-        
-        $response = $this->readline();
-        $type = $response[0];
-        $message = substr($response, 1);
+        $firstline = $this->readline();
+        $type = $firstline[0];
+        $message = substr($firstline, 1);
         
         // Switch by response type.
         
         switch ($type)
         {
-            // Error : return the error message.
+            // Error : throw an exception with the error message.
             
             case '-':
                 
-                return (string)$message;
+                throw new RedisException($message);
             
-            // Status : 'OK' is translated to true.
+            // Status : 'OK' and 'PONG' are translated to true.
             
             case '+':
                 
-                if ($message === 'OK') return true;
-                return $message;
+                $this->last_status = $message;
+                return ($message === 'OK' || $message === 'PONG') ? true : false;
             
             // Integer : return the number.
             
@@ -1435,99 +287,58 @@ class RedisClient extends SimpleSocketClient
                 
                 return (int)$message;
             
-            // Bulk : return the string.
+            // Bulk : return the string, or null on failure.
             
             case '$':
                 
-                if ($message == -1) return false;
-                return $this->read($message);
+                return ($message === '-1') ? null : $this->decode($this->read($message));
             
-            // Multi-bulk : empty results are filled with false.
+            // Multi-bulk : empty results are filled with nulls.
             
             case '*':
                 
+                // Count the number of bulk items.
+                
+                $count = (int)$message;
+                
+                // If streaming is enabled, return a stream object.
+                
+                if ($this->streaming && $count) return new RedisStream($this, $this->con, $count);
+                
+                // Otherwise, read the whole response into an array.
+                
                 $return = array();
-                for ($i = 0; $i < $message; $i++)
+                for ($i = 0; $i < $count; $i++)
                 {
                     $header = $this->readline();
                     if ($header[0] !== '$')
                     {
-                        throw new Exception('Unknown response received: ' . $header);
+                        throw new RedisException('Unexpected response from Redis: ' . $header);
                     }
                     elseif ($header === '$-1')
                     {
-                        $return[] = false;
+                        $return[] = null;
                     }
                     else
                     {
-                        $return[] = $this->read(substr($header, 1));
+                        $return[] = $this->decode($this->read(substr($header, 1)));
                     }
                 }
+                
                 return $return;
                 
             // Unknown response type.
             
             default:
                 
-                $this->disconnect();
-                throw new Exception('Unknown response received: ' . $response);
+                throw new RedisException('Unexpected response from Redis: ' . $response);
         }
     }
     
     
-    // Multi-bulk command sending method.  $force : false (no fallback), true (fallback), integer (fallback with a bulk portion).
+    // Array flattening method.
     
-    private function multi_bulk_command($elements, $force = 0)
-    {
-        // If multi-bulk commands are not available. (Redis 1.1+)
-        
-        if ($this->get_redis_version() < 1.1)
-        {
-            // Fall back to an old-style command.
-            
-            if ($force === true)
-            {
-                $command = implode(' ', $elements);
-                return $this->write($command . "\r\n", false);
-            }
-            
-            // Fall back to an old-style command, with a bulk portion.
-            
-            elseif ($force > 0)
-            {
-                $command = implode(' ', array_slice($elements, 0, $force));
-                $command .= ' ' . strlen($elements[$force]) . "\r\n" . $elements[$force];
-                return $this->write($command . "\r\n", false);                
-            }
-            
-            // If $force is false, just return false.
-            
-            else
-            {
-                return false;
-            }
-        }
-        
-        // Otherwise, start writing a multi-bulk command.
-        
-        $command = '*' . count($elements) . "\r\n";
-        
-        // Add all the elements.
-        
-        foreach ($elements as $e)
-        {
-            $command .= '$' . strlen($e) . "\r\n" . $e . "\r\n";
-        }
-        
-        // Write the command to the socket.
-        
-        return $this->write($command, false);
-    }
-    
-    
-    // Array flattening method, used by sinter() and family.
-    
-    private function array_flatten($array)
+    protected function flatten($array)
     {
         // Initialize the return value.
         
@@ -1541,13 +352,11 @@ class RedisClient extends SimpleSocketClient
             {
                 foreach ($a as $b)
                 {
-                    $this->validate_key($b);
                     $return[] = $b;
                 }
             }
             else
             {
-                $this->validate_key($a);
                 $return[] = $a;
             }
         }
@@ -1622,49 +431,45 @@ class RedisClient extends SimpleSocketClient
 /**
  * Redis Stream Class.
  * 
- * An instance of this class is returned when the streaming version of a
- * command is called, such as keys_stream() or mget_stream(). Every command that
- * returns a multi-bulk reply has a streaming version. When you use those
- * commands, call fetch() on the RedisStream object until that method returns
- * a boolean false. (Note that mget() might return null on a nonexistent key,
- * so it is your responsibility to distinguish that from a boolean false.)
+ * An instance of this class is returned when a command such as MGET returns a
+ * multi-bulk response, and if enableStreaming() had previously been called.
  * Note that you must fetch all values before sending another command through
- * the same socket, or else call close() to disconnect and reconnect. Otherwise,
+ * the same socket, or else call close() to finish off the stream. Otherwise,
  * subsequence commands may exhibit unexpected behavior because unfetched data
  * would be clogging the pipe.
  */
 
-class RedisStream extends SimpleSocketClient
+class RedisStream extends SimpleSocketClient implements Iterator
 {
     // Protected properties.
-    
+
     protected $caller = null;
-    protected $type = '';
-    
-    protected $buffer = '';
+    protected $count = 0;
     protected $current = 0;
-    protected $total = 0;
+    protected $keys = null;
+    protected $key = 0;
+    protected $closed = false;
     
     
     // Constructor override.
     
-    public function __construct($caller, $con, $type)
+    public function __construct($caller, $con, $count)
     {
         // Store in instance, overriding $con in particular.
         
         $this->caller = $caller;
         $this->con = $con;
-        $this->type = $type;
+        $this->count = $count;
+    }
+    
+    
+    // Set keys. Only used with MGET and HMGET.
+    
+    public function setKeys($keys)
+    {
+        // Store in instance.
         
-        // Get the total size of the response.
-        
-        $firstline = $this->readline();
-        if (!strlen($firstline) || ($type === 'keys' && $firstline[0] !== '$') || ($type === 'multi-bulk' && $firstline[0] !== '*'))
-        {
-            $this->disconnect();
-            $this->total = 0;
-        }
-        $this->total = (substr($firstline, 1) > 0) ? substr($firstline, 1) : 0;
+        $this->keys = $keys;
     }
     
     
@@ -1672,13 +477,63 @@ class RedisStream extends SimpleSocketClient
     
     public function count()
     {
-        // If KEYS, return false.
+        // Return the count.
         
-        if ($this->type === 'keys') return false;
+        return $this->count;
+    }
+    
+    
+    // Iterator: Rewind.
+    
+    public function rewind()
+    {
+        // Reset pointer to 0.
         
-        // Otherwise, return the total size of the response.
+        $this->current = 0;
+    }
+    
+    
+    // Iterator: Valid.
+    
+    public function valid()
+    {
+        // Return false when the end of the stream is reached.
         
-        return $this->total;
+        return !$this->closed;
+    }
+    
+    
+    // Iterator: Current.
+    
+    public function current()
+    {
+        // Set the key.
+        
+        $this->key = ($this->keys === null) ? $this->current : $this->keys[$this->current];
+        
+        // Fetch the next bulk item.
+        
+        return $this->fetch();
+    }
+    
+    
+    // Iterator: Key.
+    
+    public function key()
+    {
+        // Return the key for the previous item.
+        
+        return $this->key;
+    }
+    
+    
+    // Iterator: Next.
+    
+    public function next()
+    {
+        // Do nothing here. Pointer advancement is handled by fetch().
+        
+        return 0;
     }
     
     
@@ -1686,76 +541,24 @@ class RedisStream extends SimpleSocketClient
     
     public function fetch()
     {
-        // Different behavior by command type.
+        // If the pointer is already at the end, return false.
         
-        switch ($this->type)
-        {
-            // KEYS: bulk reply, byte pointer, array buffer.
-            
-            case 'keys':
-                
-                // If the buffer is not empty, return the first item.
-                
-                if (is_array($this->buffer) && count($this->buffer)) return array_shift($this->buffer);
-                
-                // If the pointer is already at the end, return false.
-                
-                if ($this->current >= $this->total) return false;
-                
-                // Otherwise, fetch the next 8KB or until the end of the response.
-                
-                $length = 8192;
-                if ($this->current + $length >= $this->total) $length = ($this->total - $this->current) + 2;
-                $this->buffer = @stream_get_contents($this->con, $length);
-                
-                // If the last byte of the buffer isn't a space, keep reading until we get a space.
-                
-                while (!ctype_space($this->buffer[$length - 1]))
-                {
-                    $add = fgetc($this->con);
-                    if ($add === false) break;
-                    $this->buffer .= $add;
-                    $length++;
-                }
-                
-                // Increment the pointer.
-                
-                $this->current += $length;
-                
-                // Parse into an array.
-                
-                $this->buffer = explode(' ', rtrim($this->buffer));
-                
-                // Return the first element.
-                
-                return array_shift($this->buffer);
-            
-            // MULTI-BULK: bulk-by-bulk pointer, no buffer.
-            
-            case 'multi-bulk':
-            
-                // If the pointer is already at the end, return false.
-                
-                if ($this->current >= $this->total) return false;
-                
-                // Otherwise, fetch the next bulk.
-                
-                $bulk_header = $this->readline();
-                $bulk_length = (int)substr($bulk_header, 1);
-                $bulk_body = ($bulk_length < 0) ? null : $this->caller->decode($this->read($bulk_length));
-                
-                // Increment the counter.
-                
-                $this->current++;
-                
-                // Return the bulk body, or null if the bulk doesn't exist.
-                
-                return $bulk_body;
-
-            // Default.
-            
-            default: return false;
-        }
+        if ($this->closed) return false;
+        
+        // Otherwise, fetch the next bulk.
+        
+        $bulk_header = $this->readline();
+        $bulk_length = (int)substr($bulk_header, 1);
+        $bulk_body = ($bulk_length < 0) ? null : $this->caller->decode($this->read($bulk_length));
+        
+        // Increment the counter.
+        
+        $this->current++;
+        if ($this->current >= $this->count) $this->closed = true;
+        
+        // Return the bulk body, or null if the bulk doesn't exist.
+        
+        return $bulk_body;
     }
     
     
@@ -1763,8 +566,25 @@ class RedisStream extends SimpleSocketClient
     
     public function close()
     {
-        // Disconnect.
+        // Loop until the end of the stream.
         
-        $this->caller->disconnect();
+        while ($this->fetch() !== false) { }
+    }
+    
+    
+    // Destructor.
+    
+    public function __destruct()
+    {
+        // If the stream has not been closed, close now.
+        
+        if (!$this->closed) $this->close();
     }
 }
+
+
+/**
+ * Redis Exception Class.
+ */
+
+class RedisException extends Exception { }
