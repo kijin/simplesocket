@@ -345,7 +345,7 @@ class RedisClient extends SimpleSocketClient
                 
                 throw new RedisException($message);
             
-            // Status : normal responses return true immediately, others are kept for post-processing.
+            // Status : return true for normal responses, except others which must be kept for post-processing.
             
             case '+':
                 
@@ -354,12 +354,18 @@ class RedisClient extends SimpleSocketClient
                 $response = false;
                 break;
             
-            // Integer : return the number.
+            // Integer : return the boolean equivalent, except where an integer is expected.
             
             case ':':
                 
-                $response = (int)$message;
-                break;
+                if (in_array($command, array('TTL', 'APPEND', 'HLEN', 'LLEN', 'SCARD', 'ZCARD', 'LASTSAVE')))
+                {
+                    return (int)$message;
+                }
+                else
+                {
+                    return (bool)$message;
+                }
             
             // Bulk : return the string, or null on failure.
             
@@ -435,12 +441,6 @@ class RedisClient extends SimpleSocketClient
         
         switch ($command)
         {
-            // EXISTS & HEXISTS: cast to boolean.
-            
-            case 'EXISTS':
-            case 'HEXISTS':
-                return (bool)$response;
-            
             // TYPE: return the name of the type.
             
             case 'TYPE':
