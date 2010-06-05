@@ -53,7 +53,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.2.3
+ * Version: 0.2.4
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -86,8 +86,8 @@ class RedisClient extends SimpleSocketClient
     
     protected $compression = false;
     protected $streaming = false;
-    protected $pipeline_mode = false;
     protected $pipeline_history = false;
+    protected $multi_history = false;
     protected $last_status = false;
     
     
@@ -113,11 +113,10 @@ class RedisClient extends SimpleSocketClient
     {
         // Can't start two pipelines at the same time.
         
-        if ($this->pipeline_mode) throw new RedisException('Pipeline mode already in effect.');
+        if ($this->pipeline_history !== false) throw new RedisException('Pipeline mode already in effect.');
 
         // Enable pipeline mode, and initialize the history.
         
-        $this->pipeline_mode = true;
         $this->pipeline_history = array();
     }
     
@@ -142,7 +141,6 @@ class RedisClient extends SimpleSocketClient
         
         // Disable pipeline mode, and disable the history.
         
-        $this->pipeline_mode = false;
         $this->pipeline_history = false;
     }
     
@@ -169,14 +167,14 @@ class RedisClient extends SimpleSocketClient
         
         switch ($command)
         {
-            // MSET: flatten the dict into a list of alternating keys and values.
+            // MSET[NX]: flatten the dict into a list of alternating keys and values.
             
             case 'MSET':
             case 'MSETNX':
                 $args = $this->preMSET($args[0]);
                 break;
             
-            // HMSET: keep the first arg, and flatten the rest.
+            // HMSET[NX]: keep the first arg, and flatten the rest.
             
             case 'HMSET':
             case 'HMSETNX':
@@ -185,7 +183,8 @@ class RedisClient extends SimpleSocketClient
                 
             // All other commands: flatten any arrays.
             
-            default: switch (count($args))
+            default:
+            switch (count($args))
             {
                 case 0: break;
                 
@@ -215,22 +214,36 @@ class RedisClient extends SimpleSocketClient
         
         $this->write($request, false);
         
-        // If in pipeline mode, return the pipeline counter.
+        // Create a history entry. If getting multiple values, save the keys in the history, too.
         
-        if ($this->pipeline_mode)
+        $history = array($command, false);
+        if ($command === 'MGET') $history[1] = $args;
+        if ($command === 'HMGET') $history[1] = array_slice($args, 1);
+        
+        // If a MULTI block is already open, add the current command to the MULTI history.
+        
+        if ($this->multi_history !== false) $this->multi_history[] = $history;
+        
+        // If this is a MULTI or DISCARD command, initialize or destroy the MULTI history.
+        
+        if ($command === 'MULTI') $this->multi_history = array();
+        if ($command === 'DISCARD') $this->multi_history = false;
+        
+        // If a pipeline is open, add the current command to the pipeline history and return the pipeline counter.
+        
+        if ($this->pipeline_history !== false)
         {
-            $history = array($command, in_array($command, array('MGET', 'HMGET')) ? $args : false);
             $this->pipeline_history[] = $history;
             return count($this->pipeline_history);
         }
         
         // Otherwise, just fetch and return the response.
         
-        return $this->fetchResponse($command, in_array($command, array('MGET', 'HMGET')) ? $args : false);
+        return $this->fetchResponse($history[0], $history[1]);
     }
     
     
-    // Pre-Processing for MSET/HMSET.
+    // Request pre-processing for MSET/HMSET.
     
     protected function preMSET($args, $key = false)
     {
@@ -251,7 +264,7 @@ class RedisClient extends SimpleSocketClient
     }
     
     
-    // Post-Processing for INFO.
+    // Response post-processing for INFO.
     
     protected function postINFO($response)
     {
@@ -269,7 +282,7 @@ class RedisClient extends SimpleSocketClient
     }
     
     
-    // Post-Processing for MGET/HMGET.
+    // Response post-processing for MGET/HMGET.
     
     protected function postMGET($keys, $values)
     {
@@ -285,7 +298,7 @@ class RedisClient extends SimpleSocketClient
     }
     
     
-    // Post-Processing for HGETALL.
+    // Response post-processing for HGETALL.
     
     protected function postHGETALL($values)
     {
@@ -305,9 +318,9 @@ class RedisClient extends SimpleSocketClient
     
     public function fetchResponse($command = false, $args = false)
     {
-        // If the pipeline is empty, throw an exception. Otherwise, decrement the pipeline counter.
+        // If command/args are not given, we're fetching from the pipeline.
         
-        if ($this->pipeline_history !== false)
+        if ($command === false && $args === false && $this->pipeline_history !== false)
         {
             $history = array_shift($this->pipeline_history);
             if (!$history) throw new RedisException('No more responses in the pipeline.');
@@ -332,12 +345,13 @@ class RedisClient extends SimpleSocketClient
                 
                 throw new RedisException($message);
             
-            // Status : normal responses are translated to true.
+            // Status : normal responses return true immediately, others are kept for post-processing.
             
             case '+':
                 
                 $this->last_status = $message;
-                $response = (in_array($message, array('OK', 'PONG', 'QUEUED'))) ? true : false;
+                if (in_array($message, array('OK', 'PONG', 'QUEUED'))) return true;
+                $response = false;
                 break;
             
             // Integer : return the number.
@@ -362,14 +376,30 @@ class RedisClient extends SimpleSocketClient
                 
                 $count = (int)$message;
                 
-                // If streaming is enabled, return a stream object.
+                // If this is an EXEC command, create and return an array of all responses.
+                
+                if ($command === 'EXEC')
+                {
+                    $return = array();
+                    for ($i = 0; $i < $count; $i++)
+                    {
+                        $multi_history = array_shift($this->multi_history);
+                        $multi_command = $multi_history[0];
+                        $multi_args = $multi_history[1];
+                        $return[] = $this->fetchResponse($multi_command, $multi_args);
+                    }
+                    $this->multi_history = false;
+                    return $return;
+                }
+                
+                // If streaming is enabled, create a stream object and pass it to post-processing.
                 
                 if ($this->streaming && $count)
                 {
                     $response = new RedisStream($this, $count);
                 }
                 
-                // Otherwise, read the whole response into an array.
+                // Otherwise, read the whole response into an array and pass it to post-processing.
                 
                 else
                 {
@@ -405,7 +435,7 @@ class RedisClient extends SimpleSocketClient
         
         switch ($command)
         {
-            // EXISTS: cast to boolean.
+            // EXISTS & HEXISTS: cast to boolean.
             
             case 'EXISTS':
             case 'HEXISTS':
@@ -426,7 +456,7 @@ class RedisClient extends SimpleSocketClient
             case 'INFO':
                 return $this->postINFO($response);
             
-            // MGET: convert list to dict, using keys from the method call.
+            // MGET & HMGET: convert list to dict, using keys from the method call.
             
             case 'MGET':
             case 'HMGET':
@@ -460,7 +490,7 @@ class RedisClient extends SimpleSocketClient
     
     // Array flattening method.
     
-    protected function flatten($array)
+    public function flatten($array)
     {
         // Initialize the return value.
         
