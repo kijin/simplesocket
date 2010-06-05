@@ -1,5 +1,5 @@
 
-Cocumentation for the Redis client library
+Documentation for the Redis client library
 ==========================================
 
 * Redis 1.2 or higher is required. (Redis 2.0 is recommended.)

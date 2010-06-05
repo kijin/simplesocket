@@ -6,25 +6,14 @@
  * Based on Simple Socket Client, this library implements the text protocol
  * used by the Memcached caching server as well as by several other databases.
  * 
- * This library can read any data serialized/compressed by either (1) the newer
- * Memcached extension (http://pecl.php.net/package/memcached) or (2) the older
- * Memcache extension (http://pecl.php.net/package/memcache). When serializing
- * or compressing data, this library uses the same flags as the newer Memcached
- * extension does, which makes the older Memcache extension unable to access
- * certain values. There is no workaround for this shortcoming.
- * 
- * Unlike the two extensions mentioned above, this library will not fail when
- * attempting to increment/decrement a nonexistent key. Instead, this library
- * will assume an initial value of zero (0) and increment/decrement accordingly.
- * 
  * This library does not support multiple servers, because Simple Socket Client
  * doesn't. If you want to distribute keys across several Memcached instances,
  * use either of the two extensions mentioned above (they're faster anyway),
  * or use this library in combination with your own key distribution algorithm.
- * May the author suggests Distrib (http://github.com/kijin/distrib).
+ * May the author suggest Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.5
+ * Version: 0.1.6
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -57,17 +46,20 @@ class MemcachedClient extends SimpleSocketClient
      * Configuration.
      */
     
-    private $compression = 256;
+    protected $compression = 256;
     
     
     /**
      * Set compression threshold.
      */
     
-    public function set_compression($threshold = 256)
+    public function setCompressionThreshold($threshold = 256)
     {
-        // Save to instance, or false if an invalid value has been given.
-        
+        $this->compression = (int)$threshold ? (int)$threshold : false;
+    }
+    
+    public function set_compression($threshold = 256) // Alias.
+    {
         $this->compression = (int)$threshold ? (int)$threshold : false;
     }
     
@@ -315,7 +307,7 @@ class MemcachedClient extends SimpleSocketClient
      * @return  bool    True on success, false on failure.
      */
     
-    private function store($command, $key, $value, $expiry, $cas_token = null)
+    protected function store($command, $key, $value, $expiry, $cas_token = null)
     {
         // Validate the key.
         
@@ -574,7 +566,7 @@ class MemcachedClient extends SimpleSocketClient
      * @return  array  An array with 0 => flags, 1 => data.
      */
     
-    private function encode($data)
+    protected function encode($data)
     {
         // Initialize the return array.
         
@@ -614,7 +606,7 @@ class MemcachedClient extends SimpleSocketClient
      * @return  string  The processed data.
      */
     
-    private function decode($data, $flag)
+    protected function decode($data, $flag)
     {
         // Cast the flag to int.
         

@@ -1,0 +1,53 @@
+
+Documentation for the Redis client library
+==========================================
+
+* PHP 5.2 or higher is required. (PHP 5.3 is recommended.)
+
+
+How to Instantiate
+-------------------
+
+$mc = new MemcachedClient('127.0.0.1', 11211);
+
+* This library can read any data serialized/compressed by either (1) the newer
+  Memcached extension (http://pecl.php.net/package/memcached) or (2) the older
+  Memcache extension (http://pecl.php.net/package/memcache). When serializing
+  or compressing data, this library uses the same flags as the newer Memcached
+  extension does, which makes the older Memcache extension unable to access
+  certain values. There is no workaround for this shortcoming.
+
+
+How to Configure
+-----------------
+
+$mc->setCompressionThreshold($threshold);   // Default is 256 bytes.
+
+
+Methods
+-------
+
+get($key [ , &$cas_token ] )
+getmulti($keys)
+set($key, $value [ , $expiry ] )
+add($key, $value [ , $expiry ] )
+replace($key, $value [ , $expiry ] )
+append($key, $value)
+prepend($key, $value)
+cas($cas_token, $key, $value [ , $expiry ] )
+incr($key [ , $diff = 1 ] )
+decr($key [ , $diff = 1 ] )
+delete($key)
+flush()
+stats()
+
+* Unlike the two extensions mentioned above, this library will not fail when
+  attempting to increment/decrement a nonexistent key. Instead, this library
+  will assume an initial value of zero (0) and increment/decrement accordingly.
+  This may not be an atomic operation under high load.
+
+* If no expiry is specified, the key will not expire until Memcached runs out of
+  memory or the server is restarted. You should not count on zero-expiry keys
+  to stay there indefinitely. After all, Memcached is just a cache.
+
+* On error, E_USER_NOTICE will be triggered. No exceptions will be thrown.
