@@ -7,20 +7,7 @@
  * used by the Redis key-value store. It uses the multi-bulk command format,
  * which means you need Redis 1.2 or higher. Redis 2.0 is recommended.
  * 
- * Features:
- *   - Automatic serialization of non-scalar values.
- *   - Automatic compression of large values.
- *   - Incremental streaming of large result sets.
- *   - Pipelining of multiple commands.
- * 
  * IMPORTANT: Redis 1.0 is no longer supported.
- * 
- * If you attempt to use a command that is not supported by your version of
- * Redis, you will get a RedisException. The same will happen if the server
- * returns any other error, e.g. incorrect number of arguments.
- * 
- * If you attempt to store an array or object where only strings are allowed,
- * 
  * 
  * This library does not support multiple servers, nor any distribution method.
  * If you want to distribute keys across several Redis instances, use a more
