@@ -1,0 +1,124 @@
+
+Cocumentation for the Redis client library
+==========================================
+
+* Redis 1.2 or higher is required. (Redis 2.0 is recommended.)
+* PHP 5.2 or higher is required. (PHP 5.3 is recommended.)
+
+
+How to Instantiate
+-------------------
+
+$redis = new RedisClient('127.0.0.1', 6379);
+
+* If you attempt to store an array or object where Redis expects a string,
+  the array or object will be automatically serialized. When the value is
+  later fetched, it will be automatically unserialized. But this process adds
+  idiosyncratic headers to the value, which might not be compatible with other
+  client libraries. If interoperation is important for you, manually serialize
+  all your values using something like json_encode().
+
+  
+How to Configure
+-----------------
+
+$redis->enableCompression(1024);        // All values over 1K will be compressed.
+$redis->enableStreaming();              // Saves memory when handling very large responses.
+
+* Compression can help you save RAM and disk space when storing large amounts
+  of text. But this also breaks compatibility with other client libraries, so
+  compression is disabled by deault. If enableCompression() is called without
+  an argument, a compression threshold of 1KB will apply.
+  
+* Incremental streaming helps save RAM when working with large result sets.
+  All methods will behave in the same way, except that multi-bulk responses will
+  be converted to a RedisStream object which implements the Iterator interface.
+  You can access the result set by calling fetch() on this object until it
+  returns false, or you can use a foreach() loop on it.
+
+
+Pipelining
+----------
+
+$redis->openPipeline();                 // We won't wait for responses anymore.
+$redis->set('key1', 'value1');
+$redis->set('key2', 'value2');
+$redis->get('key3');
+...
+$success1 = $redis->fetchResponse();    // Call this method to fetch a response.
+$success2 = $redis->fetchResponse();
+$value3 = $redis->fetchResponse();
+...
+$redis->closePipeline();                // Call this method to quit pipelining.
+
+
+* Pipelining allows you to send multiple commands to the server without having
+  to wait for the response. To open a pipeline, call openPipeline(). Subsequent
+  method calls will return the number of outstanding responses, instead of the
+  actual response. When you're ready to fetch responses, call fetchResponse()
+  as many times as there are outstanding responses. You must fetch all responses
+  before closing the pipeline, or call closePipeline(true) to ignore responses.
+
+
+Multi/Exec blocks
+-----------------
+
+$redis->multi();
+$redis->set('key1', 'value1');
+$redis->set('key2', 'value2');
+$redis->get('key3');
+...
+$result = $redis->exec();               // Returns an array containing all responses.
+
+[or] $redis->discard();
+
+
+Commands (as of Redis 2.0)
+--------------------------
+
+This library supports all of the commands listed in the Redis documentation,
+which can be found at http://code.google.com/p/redis/wiki/CommandReference
+Future commands will be also supported out of the box.
+
+The order of arguments is the same as what is specified in the web page above,
+except in the following cases where it has been changed for convenience:
+
+* MSET, MSETNX
+  You must supply an array of the form: ( $key1 => $value1, $key2 => $value2, ... )
+
+* HMSET, HMSETNX (the latter is not a real command as of 2.0, but just in case!)
+  The first argument must be the key.
+  The second argument must be an array of the form: ( $field1 => $value1, $field2 => $value2, ... )
+
+* If a command allows a variable number of arguments, you may group them into an array.
+  This is allowed purely for your convenience. See the following examples:
+  
+  - del(array)
+  - mget(array)
+  - blpop(array, $timeout)
+  - sinterstore($destination_key, array)
+
+Responses will be formatted according to the following rules:
+
+* Status codes will be returned as boolean TRUE or FALSE.
+  The following normal status codes are transated to TRUE: 'OK', 'PONG', 'QUEUED'.
+  All other status codes are translated to FALSE.
+  In that case, the actual status code can be accessed by calling getLastStatus().
+  
+  - Exception: TYPE will return the actual name of the type, or false if the key is not found.
+
+* Integer replies will be returned as integers.
+  This includes boolean values expressed as integers, such as 0/1 for set().
+
+* Bulk replies will be usually returned as a string.
+  You may get an array or object instead, if that was what you stored in the first place.
+  
+  - Exception: Old-style KEYS will be returned as an array. (New-style KEYS is multi-bulk.)
+  - Exception: INFO will be returned as an associative array.
+
+* Multi-bulk replies will be return as an array of values.
+  If streaming is enabled, you will get a RedisStream object which can be iterated with foreach().
+  If using MGET, HMGET, or HGETALL, the keys (field names) will also be available as array keys.
+
+Any server-side error, unexpected response, etc. will cause a RedisException to be thrown.
+Network errors may cause a SimpleSocketException to be thrown.

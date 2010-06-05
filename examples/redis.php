@@ -20,31 +20,7 @@
  * returns any other error, e.g. incorrect number of arguments.
  * 
  * If you attempt to store an array or object where only strings are allowed,
- * the array or object will be automatically serialized. When the value is
- * later fetched, it will be automatically unserialized. But this process adds
- * idiosyncratic headers to the value, which might not be compatible with other
- * client libraries. If interoperation is important for you, manually serialize
- * all your values using something like json_encode().
  * 
- * Compression can help you save RAM and disk space when storing large amounts
- * of text. But this also breaks compatibility with other client libraries, so
- * compression is disabled by deault. Call enableCompression() to enable it.
- * If called without an argument, a compression threshold of 1KB will apply.
- * 
- * Incremental streaming helps save RAM when working with large result sets.
- * It is disabled by default; to enable, call enableStreaming(). All methods
- * will behave in exactly the same way, except that multi-bulk responses will
- * be converted to a RedisStream object which implements the Iterator interface.
- * You can access the result set by calling fetch() on this object until it
- * returns false, or you can use a foreach() loop on it.
- * 
- * Pipelining allows you to send multiple commands to the server without having
- * to wait for the response. To open a pipeline, call openPipeline(). Subsequent
- * method calls will return the number of outstanding responses, instead of the
- * actual response. When you're ready to fetch responses, call fetchResponse()
- * as many times as there are outstanding responses. Then call closePipeline()
- * to return to the normal mode. If the pipeline is still clogged with unfetched
- * responses, you should call closePipeline(true) to flush the pipeline.
  * 
  * This library does not support multiple servers, nor any distribution method.
  * If you want to distribute keys across several Redis instances, use a more
