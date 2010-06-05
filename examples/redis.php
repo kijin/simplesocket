@@ -169,15 +169,21 @@ class RedisClient extends SimpleSocketClient
         
         switch ($command)
         {
+            // MSET: flatten the dict into a list of alternating keys and values.
+            
             case 'MSET':
             case 'MSETNX':
                 $args = $this->preMSET($args[0]);
                 break;
-                
+            
+            // HMSET: keep the first arg, and flatten the rest.
+            
             case 'HMSET':
             case 'HMSETNX':
                 $args = $this->preMSET($args[1], $args[0]);
                 break;
+                
+            // All other commands: flatten any arrays.
             
             default: switch (count($args))
             {
@@ -274,6 +280,22 @@ class RedisClient extends SimpleSocketClient
         for ($i = 0; $i < $count; $i++)
         {
             $return[$keys[$i]] = $values[$i];
+        }
+        return $return;
+    }
+    
+    
+    // Post-Processing for HGETALL.
+    
+    protected function postHGETALL($values)
+    {
+        // Construct an associative array.
+        
+        $return = array();
+        $count = count($values);
+        for ($i = 0; $i < $count; $i += 2)
+        {
+            $return[$values[$i]] = $values[$i + 1];
         }
         return $return;
     }
@@ -383,28 +405,52 @@ class RedisClient extends SimpleSocketClient
         
         switch ($command)
         {
+            // EXISTS: cast to boolean.
+            
             case 'EXISTS':
             case 'HEXISTS':
                 return (bool)$response;
-                
+            
+            // TYPE: return the name of the type.
+            
             case 'TYPE':
                 return ($this->last_status === 'none') ? false : $this->last_status;
-                
+            
+            // KEYS: if old-style response is received, convert to array.
+            
             case 'KEYS':
                 return (is_scalar($response)) ? explode(' ', $response) : $response;
-                
+            
+            // INFO: convert to associative array.
+            
             case 'INFO':
                 return $this->postINFO($response);
+            
+            // MGET: convert list to dict, using keys from the method call.
             
             case 'MGET':
             case 'HMGET':
                 if ($this->streaming)
                 {
                     $response->setKeys($args);
+                    break;
                 }
                 else
                 {
                     return $this->postMGET($args, $response);
+                }
+            
+            // HGETALL: convert list of alternating keys and values into a dict.
+            
+            case 'HGETALL':
+                if ($this->streaming)
+                {
+                    $response->returnPairs();
+                    break;
+                }
+                else
+                {
+                    return $this->postHGETALL($response);
                 }
         }
         
@@ -511,7 +557,7 @@ class RedisClient extends SimpleSocketClient
  * multi-bulk response, and if enableStreaming() had previously been called.
  * Note that you must fetch all values before sending another command through
  * the same socket, or else call close() to finish off the stream. Otherwise,
- * subsequence commands may exhibit unexpected behavior because unfetched data
+ * subsequent commands may exhibit unexpected behavior because unfetched data
  * would be clogging the pipe.
  */
 
@@ -524,6 +570,7 @@ class RedisStream implements Iterator
     protected $current = 0;
     protected $keys = null;
     protected $key = 0;
+    protected $pairs = false;
     protected $closed = false;
     
     
@@ -531,19 +578,22 @@ class RedisStream implements Iterator
     
     public function __construct($caller, $count)
     {
-        // Store in instance, overriding $con in particular.
-        
         $this->caller = $caller;
         $this->count = $count;
     }
     
     
+    // Return pairs. Only used with HGETALL.
+    
+    public function returnPairs()
+    {
+        $this->pairs = true;
+    }
+    
     // Set keys. Only used with MGET and HMGET.
     
     public function setKeys($keys)
     {
-        // Store in instance.
-        
         $this->keys = $keys;
     }
     
@@ -554,7 +604,7 @@ class RedisStream implements Iterator
     {
         // Return the count.
         
-        return $this->count;
+        return $this->pairs ? ($this->count / 2) : $this->count;
     }
     
     
@@ -584,7 +634,18 @@ class RedisStream implements Iterator
     {
         // Set the key.
         
-        $this->key = ($this->keys === null) ? $this->current : $this->keys[$this->current];
+        if ($this->keys !== null)
+        {
+            $this->key = $this->keys[$this->current];
+        }
+        elseif ($this->pairs)
+        {
+            $this->key = $this->fetch();
+        }
+        else
+        {
+            $this->key = $this->current;
+        }
         
         // Fetch the next bulk item.
         
