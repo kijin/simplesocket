@@ -358,7 +358,7 @@ class RedisClient extends SimpleSocketClient
             
             case ':':
                 
-                if (in_array($command, array('TTL', 'APPEND', 'HLEN', 'LLEN', 'SCARD', 'ZCARD', 'LASTSAVE')))
+                if (in_array($command, array('TTL', 'INCR', 'INCRBY', 'DECR', 'DECRBY', 'APPEND', 'HLEN', 'LLEN', 'SCARD', 'ZCARD', 'LASTSAVE')))
                 {
                     return (int)$message;
                 }
