@@ -354,18 +354,11 @@ class RedisClient extends SimpleSocketClient
                 $response = false;
                 break;
             
-            // Integer : return the boolean equivalent, except where an integer is expected.
+            // Integer : just return the value.
             
             case ':':
                 
-                if (in_array($command, array('TTL', 'INCR', 'INCRBY', 'DECR', 'DECRBY', 'APPEND', 'HLEN', 'LLEN', 'SCARD', 'ZCARD', 'LASTSAVE')))
-                {
-                    return (int)$message;
-                }
-                else
-                {
-                    return (bool)$message;
-                }
+                return (int)$message;
             
             // Bulk : return the string, or null on failure.
             
