@@ -11,14 +11,14 @@ How to Instantiate
 
 $redis = new RedisClient('127.0.0.1', 6379);
 
-* If you attempt to store an array or object where Redis expects a string,
-  the array or object will be automatically serialized. When the value is
-  later fetched, it will be automatically unserialized. But this process adds
-  idiosyncratic headers to the value, which might not be compatible with other
-  client libraries. If interoperation is important for you, manually serialize
-  all your values using something like json_encode().
+* Arrays and objects are not allowed in values. If you supply an array or object
+  where a string is expected, the value will be cast to string (NOT serialized).
+  You can work around this by adding a __toString() method to your classes,
+  which should return a serialized or json-encoded representation of itself.
+  However, it is recommended that you perform the serialization before trying to
+  store non-scalar values in Redis.
 
-  
+
 How to Configure
 -----------------
 

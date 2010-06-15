@@ -16,7 +16,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.2.4
+ * Version: 0.2.5
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -479,11 +479,11 @@ class RedisClient extends SimpleSocketClient
     
     public function encode($data)
     {
-        // If the data is not scalar, serialize it.
+        // If the data is not scalar, cast to string.
         
         if (!is_scalar($data))
         {
-            $data = '#SERiALiZeD:' . serialize($data);
+            $data = (string)$data;
         }
         
         // If the data is bigger than the threshold, compress it.
@@ -522,7 +522,7 @@ class RedisClient extends SimpleSocketClient
             $data = gzuncompress(substr($data, 9));
         }
         
-        // If the data seems serialized, unserialize it.
+        // If the data seems serialized, unserialize it (for compatibility only).
         
         if (!strncmp($data, '#SERiALiZeD:', 12))
         {   
