@@ -111,7 +111,6 @@ Responses will be formatted according to the following rules:
   This includes boolean values expressed as integers, such as 0/1 for set().
 
 * Bulk replies will be usually returned as a string.
-  You may get an array or object instead, if that was what you stored in the first place.
   
   - Exception: Old-style KEYS will be returned as an array. (New-style KEYS is multi-bulk.)
   - Exception: INFO will be returned as an associative array.
