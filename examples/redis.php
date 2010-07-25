@@ -16,7 +16,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.2.5
+ * Version: 0.2.6
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -221,7 +221,6 @@ class RedisClient extends SimpleSocketClient
         {
             $return[] = $key;
             $return[] = $value;
-            echo "$key $value \n";
         }
         return $return;
     }
