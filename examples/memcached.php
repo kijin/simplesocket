@@ -19,7 +19,7 @@
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
 
 /**
- * Copyright (c) 2010, Kijin Sung <kijin.sung@gmail.com>
+ * Copyright (c) 2010-2011, Kijin Sung <kijin.sung@gmail.com>
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
