@@ -16,7 +16,7 @@
  * May the author suggests Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.2.7
+ * Version: 0.2.8
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -244,6 +244,7 @@ class RedisClient extends SimpleSocketClient
         foreach ($response as $line)
         {
             if (!$line) continue;
+            if (!strncmp($line, '#', 1)) continue;
             $line = explode(':', $line, 2);
             $return[$line[0]] = trim($line[1]);
         }
