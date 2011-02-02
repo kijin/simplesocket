@@ -30,7 +30,7 @@
  * }
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.8
+ * Version: 0.1.9
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -609,9 +609,9 @@ class HttpClient extends SimpleSocketClient
                 {
                     $line = explode(':', substr($line, 1), 2);
                     $fp = fopen($line[1], 'r');
-                    stream_copy_to_stream($fp, $this->con);
+                    stream_copy_to_stream($fp, $this->_con);
                     fclose($fp);
-                    fwrite($this->con, "\r\n");
+                    fwrite($this->_con, "\r\n");
                 }
                 
                 // Otherwise, just write to the socket.

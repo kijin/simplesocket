@@ -10,7 +10,7 @@
  * as well as basic key validation and command building helper methods.
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.7
+ * Version: 0.1.8
  * 
  * Copyright (c) 2010, Kijin Sung <kijin.sung@gmail.com>
  * 
@@ -36,16 +36,27 @@
 class SimpleSocketClient
 {
     /**
-     * Protected properties.
+     * Connection settings.
      * 
      * Although these properties can be manipulated directly by children,
      * it is best to keep them in the hands of the parent class.
      */
     
-    protected $con = null;
-    protected $host = '';
-    protected $port = 0;
-    protected $timeout = 0;
+    protected $_con = null;
+    protected $_host = '';
+    protected $_port = 0;
+    protected $_timeout = 0;
+    
+    
+    /**
+     * Default host and port.
+     *
+     * These properties can be overridden by children to provide default values
+     * for host and port if they're not passed to the constructor.
+     */
+    
+    protected $_default_host = null;
+    protected $_default_port = null;
     
     
     /**
@@ -60,7 +71,7 @@ class SimpleSocketClient
     
     public function __construct($host, $port, $timeout = 5)
     {
-        // A quick check for IPv6 addresses (with colon).
+        // A quick check for IPv6 addresses. (They contain colons.)
         
         if (strpos($host, ':') !== false && strpos($host, '[') === false)
         {
@@ -69,9 +80,9 @@ class SimpleSocketClient
         
         // Keep the connection info, but don't connect now.
         
-        $this->host = $host;
-        $this->port = $port;
-        $this->timeout = $timeout;
+        $this->_host = $host;
+        $this->_port = $port;
+        $this->_timeout = $timeout;
     }
     
     
@@ -85,35 +96,25 @@ class SimpleSocketClient
     
     public function connect()
     {
-        // If already connected, return true.
+        // If already connected, don't do anything.
         
-        if ($this->con !== null && $this->con !== false) return true;
+        if ($this->_con !== null && $this->_con !== false) return true;
         
-        // If a connection attempt had failed, return false.
+        // If a previous connection attempt had failed, do not retry.
         
-        if ($this->con === false) return false;
-        
-        // Get the host:port or socket name.
-        
-        if ($this->port === false)
-        {
-            $socket = 'unix://' . $this->host;
-        }
-        else
-        {
-            $socket = $this->host . ':' . $this->port;
-        }
+        if ($this->_con === false) throw new SimpleSocketException('Cannot connect to ' . $this->_host . ' port ' . $this->_port);
         
         // Attempt to connect.
         
-        $this->con = stream_socket_client($socket, $errno, $errstr, $this->timeout);
+        $socket = $this->_port ? ($this->_host . ':' . $this->_port) : ('unix://' . $this->_host);
+        $this->_con = stream_socket_client($socket, $errno, $errstr, $this->_timeout);
         
-        // If there's an error, set $con to false, and throw an exception.
+        // If there's an error, set $_con to false, and throw an exception.
         
-        if (!$this->con)
+        if (!$this->_con)
         {
-            $this->con = false;
-            throw new SimpleSocketException('Cannot connect to ' . $this->host . ' port ' . $this->port . ': ' . $errstr . ' (code ' . $errno . ')');
+            $this->_con = false;
+            throw new SimpleSocketException('Cannot connect to ' . $this->_host . ' port ' . $this->_port . ': ' . $errstr . ' (code ' . $errno . ')');
         }
         
         // Return true to indicate success.
@@ -135,8 +136,8 @@ class SimpleSocketClient
     {
         // Close the socket.
         
-        @fclose($this->con);
-        $this->con = null;
+        @fclose($this->_con);
+        $this->_con = null;
         
         // Return true to indicate success.
         
@@ -163,26 +164,22 @@ class SimpleSocketClient
     {
         // If not connected yet, connect now.
         
-        if ($this->con === null) $this->connect();
-        if ($this->con === false)
-        {
-            throw new SimpleSocketException('Cannot connect to ' . $this->host . ' port ' . $this->port);
-        }
+        if ($this->_con === null) $this->connect();
         
         // Read the data from the socket.
         
-        $data = stream_get_contents($this->con, $bytes);
+        $data = stream_get_contents($this->_con, $bytes);
         
         // If $autonewline is true, read 2 more bytes.
         
-        if ($autonewline && $bytes !== -1) stream_get_contents($this->con, 2);
+        if ($autonewline && $bytes !== -1) stream_get_contents($this->_con, 2);
         
         // If the result is false, throw an exception.
         
         if ($data === false)
         {
             $this->disconnect();
-            throw new SimpleSocketException('Cannot read ' . $bytes . ' bytes from ' . $this->host . ' port ' . $this->port);
+            throw new SimpleSocketException('Cannot read ' . $bytes . ' bytes from ' . $this->_host . ' port ' . $this->_port);
         }
         
         // Otherwise, return the data.
@@ -208,22 +205,18 @@ class SimpleSocketClient
     {
         // If not connected yet, connect now.
         
-        if ($this->con === null) $this->connect();
-        if ($this->con === false)
-        {
-            throw new SimpleSocketException('Cannot connect to ' . $this->host . ' port ' . $this->port);
-        }
+        if ($this->_con === null) $this->connect();
         
         // Read a line from the socket.
         
-        $data = fgets($this->con);
+        $data = fgets($this->_con);
         
         // If the result is false, throw an exception.
         
         if ($data === false)
         {
             $this->disconnect();
-            throw new SimpleSocketException('Cannot read a line from ' . $this->host . ' port ' . $this->port);
+            throw new SimpleSocketException('Cannot read a line from ' . $this->_host . ' port ' . $this->_port);
         }
         
         // Otherwise, trim and return the data.
@@ -251,11 +244,7 @@ class SimpleSocketClient
     {
         // If not connected yet, connect now.
         
-        if ($this->con === null) $this->connect();
-        if ($this->con === false)
-        {
-            throw new SimpleSocketException('Cannot connect to ' . $this->host . ' port ' . $this->port);
-        }
+        if ($this->_con === null) $this->connect();
         
         // If $autonewline is true, add CRLF to the content.
         
@@ -267,17 +256,17 @@ class SimpleSocketClient
         {
             // Start writing.
             
-            $written = fwrite($this->con, $string);
+            $written = fwrite($this->_con, $string);
             
             // If the result is false, throw an exception.
             
             if ($written === false)
             {
                 $this->disconnect();
-                throw new SimpleSocketException('Cannot write to ' . $this->host . ' port ' . $this->port);
+                throw new SimpleSocketException('Cannot write to ' . $this->_host . ' port ' . $this->_port);
             }
             
-            // If nothing was written, return true to indicate success.
+            // If nothing was written, it probably means we've already done writing.
             
             if ($written == 0) return true;
             
@@ -307,20 +296,9 @@ class SimpleSocketClient
     
     public function validate_key($key)
     {
-        // Empty?
-        
         if ($key === '') throw new InvalidKeyException('Key is empty');
-        
-        // Check the length.
-        
         if (strlen($key) > 250) throw new InvalidKeyException('Key is too long: ' . $key);
-        
-        // Check for illegal characters.
-        
         if (preg_match('/[^\\x21-\\x7e]/', $key)) throw new InvalidKeyException('Illegal character in key: ' . $key);
-        
-        // Return true to indicate pass.
-        
         return true;
     }
     
@@ -338,12 +316,7 @@ class SimpleSocketClient
     
     public function build_command( /* arguments */ )
     {
-        // Fetch all the arguments.
-        
         $args = func_get_args();
-        
-        // Glue and return.
-        
         return implode(' ' , $args);
     }
     
@@ -351,15 +324,13 @@ class SimpleSocketClient
     /**
      * Destructor.
      * 
-     * Although not really necessary, the destructor will attempts to
+     * Although not really necessary, the destructor will attempt to
      * disconnect in case something weird happens.
      */
     
     public function __destruct()
     {
-        // Disconnect.
-        
-        @fclose($this->con);
+        @fclose($this->_con);
     }
 }
 
