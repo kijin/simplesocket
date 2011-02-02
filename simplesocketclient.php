@@ -69,13 +69,21 @@ class SimpleSocketClient
      * @param  int     Connection timeout in seconds. [optional: default is 5]
      */
     
-    public function __construct($host, $port, $timeout = 5)
+    public function __construct($host = null, $port = null, $timeout = 5)
     {
         // A quick check for IPv6 addresses. (They contain colons.)
         
         if (strpos($host, ':') !== false && strpos($host, '[') === false)
         {
             $host = '[' . $host . ']';
+        }
+        
+        // Use default values?
+        
+        if (is_null($host) && is_null($port))
+        {
+            $host = $this->_default_host;
+            $port = $this->_default_port;
         }
         
         // Keep the connection info, but don't connect now.

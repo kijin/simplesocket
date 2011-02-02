@@ -52,6 +52,8 @@ class RedisClient extends SimpleSocketClient
     protected $pipeline_history = false;
     protected $multi_history = false;
     protected $last_status = false;
+    protected $_default_host = '127.0.0.1';
+    protected $_default_port = 6379;
     
     
     // Enable compression and set the lower threshold. Default: 1KB.

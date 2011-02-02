@@ -13,7 +13,7 @@
  * May the author suggest Distrib (http://github.com/kijin/distrib).
  * 
  * URL: http://github.com/kijin/simplesocket
- * Version: 0.1.6
+ * Version: 0.1.7
  */
 
 require_once(dirname(__FILE__) . '/../simplesocketclient.php');
@@ -47,6 +47,8 @@ class MemcachedClient extends SimpleSocketClient
      */
     
     protected $compression = 256;
+    protected $_default_host = '127.0.0.1';
+    protected $_default_port = 11211;
     
     
     /**
